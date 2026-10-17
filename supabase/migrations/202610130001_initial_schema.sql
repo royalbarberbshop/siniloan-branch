@@ -228,3 +228,11 @@ create trigger on_auth_user_created
 
 -- NOTE: Admin bootstrap and booking/payment RPCs are intentionally not created
 -- as insecure client-side shortcuts. Add trusted server-side functions before launch.
+
+
+-- Restrict users to editing only their own basic profile fields.
+REVOKE UPDATE ON TABLE public.profiles FROM authenticated;
+
+GRANT UPDATE (full_name, phone)
+ON TABLE public.profiles
+TO authenticated;
