@@ -77,7 +77,9 @@ export default function App({ profile, onSignOut }){
   const [search,setSearch] = useState("");
   const [appointments,setAppointments] = useState(()=>readStorage("royal-appointments",initialAppointments));
   const [customers,setCustomers] = useState(()=>readStorage("royal-customers",initialCustomers));
-  const [barbers,setBarbers] = useState(()=>readStorage("royal-barbers",initialBarbers));
+  const [barbers,setBarbers] = useState([]);
+  const [barbersLoading, setBarbersLoading] = useState(false);
+  const [barbersError, setBarbersError] = useState("");
   const [services,setServices] = useState([]);
   const [servicesLoading, setServicesLoading] = useState(false);
   const [servicesError, setServicesError] = useState("");
@@ -88,8 +90,72 @@ export default function App({ profile, onSignOut }){
 
   useEffect(()=>localStorage.setItem("royal-appointments",JSON.stringify(appointments)),[appointments]);
   useEffect(()=>localStorage.setItem("royal-customers",JSON.stringify(customers)),[customers]);
-  useEffect(()=>localStorage.setItem("royal-barbers",JSON.stringify(barbers)),[barbers]);
     useEffect(()=>localStorage.setItem("royal-sales",JSON.stringify(sales)),[sales]);
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+    let cancelled = false;
+    async function loadBarbers() {
+      setBarbersLoading(true);
+      setBarbersError("");
+      const { data, error } = await supabase
+        .from("barbers")
+        .select("id, display_name, role, availability_status, is_active")
+        .order("display_name");
+      if (cancelled) return;
+      if (error) {
+        setBarbersError(error.message);
+        setBarbersLoading(false);
+        return;
+      }
+      setBarbers((data || []).map(row => ({
+        id: row.id,
+        name: row.display_name,
+        role: row.role || "Barber",
+        status: row.availability_status || (row.is_active ? "Available" : "Inactive"),
+        schedule: "Schedule not configured",
+        today: 0,
+      })));
+      setBarbersLoading(false);
+    }
+    loadBarbers();
+    return () => { cancelled = true; };
+  }, []);
+
+  const saveBarber = async (draft, editingId) => {
+    if (!supabase) throw new Error("Supabase is not configured.");
+    const payload = {
+      display_name: draft.name.trim(),
+      role: draft.role || "Barber",
+      availability_status: draft.status || "Available",
+      is_active: (draft.status || "Available") !== "Inactive",
+    };
+    if (!payload.display_name) throw new Error("Enter the barber's full name.");
+    const query = editingId
+      ? supabase.from("barbers").update(payload).eq("id", editingId)
+      : supabase.from("barbers").insert(payload);
+    const { data, error } = await query
+      .select("id, display_name, role, availability_status, is_active")
+      .single();
+    if (error) throw error;
+    const saved = {
+      id: data.id,
+      name: data.display_name,
+      role: data.role || "Barber",
+      status: data.availability_status || "Available",
+      schedule: "Schedule not configured",
+      today: 0,
+    };
+    setBarbers(current => {
+      const next = editingId ? current.map(item => item.id === editingId ? saved : item) : [...current, saved];
+      return next.sort((a, b) => a.name.localeCompare(b.name));
+    });
+    return saved;
+  };
+
+  const updateBarberStatus = async (barber, status) => {
+    await saveBarber({ name: barber.name, role: barber.role, status }, barber.id);
+  };
+
   useEffect(() => {
   if (!isSupabaseConfigured || !supabase) return;
 
@@ -212,6 +278,7 @@ export default function App({ profile, onSignOut }){
   barbers, setBarbers,
   services, setServices,
   servicesLoading, servicesError, saveService,
+  barbersLoading, barbersError, saveBarber, updateBarberStatus,
   sales, setSales,
   search, setSearch,
   notify, setModal,
@@ -305,7 +372,47 @@ function Customers(p){
 }
 
 function Barbers(p){
-  return <><PageTitle title="Barbers & Staff Roster" subtitle="Manage barber profiles, shift information, and current availability." action={<Button icon={Plus} onClick={()=>p.setModal({type:"barber"})}>Add New Barber</Button>}/><div className="barber-grid">{p.barbers.map(b=><section className="panel barber-profile" key={b.id}><div className="barber-profile-top"><div className="barber-big-avatar">{b.name.split(" ").map(s=>s[0]).join("").slice(0,2)}</div><Status value={b.status}/></div><h3>{b.name}</h3><p>{b.role}</p><div className="barber-info-line"><Clock3 size={15}/><span>{b.schedule}</span></div><div className="barber-stats"><div><strong>{b.today}</strong><span>Services today</span></div><div><strong>{money(b.today*180)}</strong><span>Est. service value</span></div></div><div className="barber-card-actions"><Button kind="secondary" onClick={()=>p.notify("Barber profile editing will be connected to the database in the next phase.")}>Edit Profile</Button><Button kind={b.status==="Available"?"secondary":"success"} onClick={()=>{p.setBarbers(xs=>xs.map(x=>x.id===b.id?{...x,status:x.status==="Available"?"On Break":"Available"}:x));p.notify("Barber availability updated in this demo.")}}>{b.status==="Available"?"Set Break":"Set Available"}</Button></div></section>)}</div><section className="panel"><h3>Staff scheduling note</h3><p className="muted-text">This prototype displays sample shifts. Production scheduling should use actual shift records and must check barber availability before confirming an appointment.</p></section></>;
+  const [editing, setEditing] = useState(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [draft, setDraft] = useState({name:"", role:"Barber", status:"Available"});
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const openEditor = barber => {
+    setEditorOpen(true);
+    setEditing(barber?.id || null);
+    setDraft({name:barber?.name || "", role:barber?.role || "Barber", status:barber?.status || "Available"});
+    setFormError("");
+  };
+  const save = async event => {
+    event.preventDefault();
+    setSaving(true); setFormError("");
+    try {
+      await p.saveBarber(draft, editing);
+      setEditorOpen(false); setEditing(null); setDraft({name:"", role:"Barber", status:"Available"});
+      p.notify(editing ? "Barber profile updated in Supabase." : "Barber added to Supabase.");
+    } catch (error) { setFormError(error.message || "Unable to save barber."); }
+    finally { setSaving(false); }
+  };
+  return <>
+    <PageTitle title="Barbers & Staff Roster" subtitle="Manage barber profiles, shift information, and current availability." action={<Button icon={Plus} onClick={()=>openEditor(null)}>Add New Barber</Button>}/>
+    {p.barbersLoading && <div className="notice">Loading barber records from Supabase…</div>}
+    {p.barbersError && <div className="notice notice-error">Unable to load barbers: {p.barbersError}</div>}
+    {!p.barbersLoading && !p.barbersError && p.barbers.length===0 && <section className="panel"><EmptyState title="No barbers yet" text="Add a barber to create the first roster record."/></section>}
+    <div className="barber-grid">{p.barbers.map(b=><section className="panel barber-profile" key={b.id}>
+      <div className="barber-profile-top"><div className="barber-big-avatar">{b.name.split(" ").map(s=>s[0]).join("").slice(0,2)}</div><Status value={b.status}/></div>
+      <h3>{b.name}</h3><p>{b.role}</p><div className="barber-info-line"><Clock3 size={15}/><span>{b.schedule}</span></div>
+      <div className="barber-stats"><div><strong>—</strong><span>Services today</span></div><div><strong>—</strong><span>Service value today</span></div></div>
+      <div className="barber-card-actions"><Button kind="secondary" onClick={()=>openEditor(b)}>Edit Profile</Button><Button kind={b.status==="Available"?"secondary":"success"} onClick={async()=>{try{await p.updateBarberStatus(b,b.status==="Available"?"On Break":"Available");p.notify("Barber availability saved to Supabase.");}catch(error){p.notify(`Unable to update availability: ${error.message}`);}}}>{b.status==="Available"?"Set Break":"Set Available"}</Button></div>
+    </section>)}</div>
+    <section className="panel"><h3>Staff scheduling note</h3><p className="muted-text">Barber profiles are saved in Supabase. Shift schedules are managed separately through barber working hours and are not configured here yet.</p></section>
+    { editorOpen && <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget){setEditorOpen(false);setEditing(null);setDraft({name:"",role:"Barber",status:"Available"});}}}><div className="modal"><div className="modal-head"><div><h2>{editing ? "Edit Barber" : "Add Barber"}</h2><p>{editing ? "Update this barber's roster profile." : "Add a barber profile to the roster."}</p></div><button onClick={()=>{setEditorOpen(false);setEditing(null);setDraft({name:"",role:"Barber",status:"Available"});}}><X/></button></div><form className="modal-form" onSubmit={save}>
+      <label>Full name<input required value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))} placeholder="Enter full name"/></label>
+      <label>Role<select value={draft.role} onChange={e=>setDraft(d=>({...d,role:e.target.value}))}><option>Barber</option><option>Senior Barber</option><option>Master Barber</option><option>Manager</option></select></label>
+      <label>Availability<select value={draft.status} onChange={e=>setDraft(d=>({...d,status:e.target.value}))}><option>Available</option><option>On Break</option><option>Busy</option><option>Inactive</option></select></label>
+      {formError && <div className="notice notice-error">{formError}</div>}
+      <div className="modal-actions"><Button kind="secondary" onClick={()=>{setEditorOpen(false);setEditing(null);setDraft({name:"",role:"Barber",status:"Available"});}}>Cancel</Button><Button disabled={saving}>{saving?"Saving…":"Save Barber"}</Button></div>
+    </form></div></div>}
+  </>;
 }
 
 function Services(p){
