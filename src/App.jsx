@@ -103,6 +103,7 @@ export default function App({ profile, onSignOut }){
         .from("appointments")
         .select(`id, starts_at, queue_date, queue_number, status, payment_status,
           customer:profiles!appointments_customer_id_fkey(full_name, phone),
+          walk_in_customer:walk_in_customers!appointments_walk_in_customer_id_fkey(full_name, phone),
           service:services!appointments_service_id_fkey(name, price_pesos),
           barber:barbers!appointments_barber_id_fkey(display_name)`)
         .order("starts_at", { ascending: true });
@@ -120,9 +121,10 @@ export default function App({ profile, onSignOut }){
         const starts = new Date(row.starts_at);
         return {
           id: row.id,
+          reference: `APT-${String(row.id).slice(0, 8).toUpperCase()}`,
           queue: `Q-${String(row.queue_number).padStart(3, "0")}`,
-          customer: row.customer?.full_name || "Customer",
-          phone: row.customer?.phone || "",
+          customer: row.customer?.full_name || row.walk_in_customer?.full_name || "Customer",
+          phone: row.customer?.phone || row.walk_in_customer?.phone || "",
           service: row.service?.name || "Service unavailable",
           barber: row.barber?.display_name || "Unassigned",
           date: row.queue_date,
@@ -305,6 +307,10 @@ export default function App({ profile, onSignOut }){
   const navigate = (name)=>{setPage(name);setMobileNav(false);setSearch("");};
   const updateStatus = async (id, status) => {
     if (!supabase) { notify("Supabase is not configured."); return; }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id))) {
+      notify("This appointment has no valid database ID. Refresh the page and try again.");
+      return;
+    }
     const statusValues = { "Booked": "booked", "Checked In": "checked_in", "Waiting": "waiting", "In Service": "in_service", "Completed": "completed", "Cancelled": "cancelled", "No Show": "no_show" };
     const nextStatus = statusValues[status];
     if (!nextStatus) { notify("Unsupported appointment status."); return; }
@@ -316,13 +322,38 @@ export default function App({ profile, onSignOut }){
     setAppointments(current => current.map(item => item.id === id ? { ...item, status } : item));
     notify(`Appointment marked ${status.toLowerCase()}.`);
   };
-  const addWalkIn = (form)=>{
-  const queueNum = Math.max(0,...appointments.map(a=>Number((a.queue||"Q-000").split("-")[1])||0))+1;
-  const service = services.find(s=>s.name===form.service);
-  const item={id:`APT-${String(Date.now()).slice(-6)}`,queue:`Q-${String(queueNum).padStart(3,"0")}`,customer:form.name,phone:form.phone,service:form.service,barber:form.barber||"Unassigned",date:todayISO(),time:new Date().toLocaleTimeString("en-PH",{hour:"2-digit",minute:"2-digit"}),status:"Waiting",amount:service?.price||0};
-    setAppointments(a=>[item,...a]);
-    if(!customers.some(c=>c.phone===form.phone)){setCustomers(c=>[{id:`CUS-${String(Date.now()).slice(-5)}`,name:form.name,phone:form.phone,visits:0,lastVisit:"—",status:"Active"},...c]);}
-    setModal(null);navigate("Live Queue");notify(`Walk-in registered. Queue number ${item.queue}.`);
+  const addWalkIn = async (form)=>{
+    if (!supabase) { notify("Supabase is not configured."); return; }
+    const service = services.find(s => s.name === form.service);
+    const barber = barbers.find(b => b.name === form.barber);
+    if (!form.name?.trim() || !form.phone?.trim()) { notify("Enter the customer's name and phone number."); return; }
+    if (!service?.id) { notify("Choose an active service before registering the walk-in."); return; }
+    try {
+      const { data, error } = await supabase.rpc("admin_register_walk_in", {
+        p_customer_name: form.name.trim(),
+        p_customer_phone: form.phone.trim(),
+        p_service_id: service.id,
+        p_barber_id: barber?.id || null,
+      });
+      if (error) throw error;
+      const created = Array.isArray(data) ? data[0] : data;
+      if (!created?.id || !created?.queue_number) throw new Error("The database did not return the new appointment details.");
+      const item = {
+        id: created.id,
+        reference: `APT-${String(created.id).slice(0, 8).toUpperCase()}`,
+        queue: `Q-${String(created.queue_number).padStart(3, "0")}`,
+        customer: form.name.trim(), phone: form.phone.trim(), service: service.name,
+        barber: barber?.name || "Unassigned", date: created.queue_date,
+        time: new Date(created.starts_at).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" }),
+        status: "Waiting", amount: Number(service.price || 0), paymentStatus: "unpaid",
+      };
+      setAppointments(current => [item, ...current]);
+      setModal(null);
+      navigate("Live Queue");
+      notify(`Walk-in saved. Queue number ${item.queue}.`);
+    } catch (error) {
+      notify(`Could not register walk-in: ${error?.message || "Unknown error"}`);
+    }
   };
   const checkout = (form)=>{
     if(!form.items.length){notify("Add at least one service before checkout.");return;}
@@ -369,7 +400,7 @@ export default function App({ profile, onSignOut }){
         {page==="Reports & Analytics" && <Reports {...commonProps}/>}
         {page==="Settings" && <SettingsPage profileName={profileName} setProfileName={setProfileName} notify={notify}/>}
       </div>
-      <footer className="footer"><span>© 2026 Royal Barber Shop</span><span>Admin prototype <b>•</b> Demo data only</span></footer>
+      <footer className="footer"><span>© 2026 Royal Barber Shop</span><span>Admin workspace <b>•</b> Supabase connected</span></footer>
     </main>
     {modal && <Modal modal={modal} setModal={setModal} services={services} barbers={barbers} setBarbers={setBarbers} customers={customers} setCustomers={setCustomers} addWalkIn={addWalkIn} checkout={checkout} notify={notify}/>}
     {toast && <div className="toast"><CircleCheck size={17}/>{toast}</div>}
@@ -404,7 +435,7 @@ function Dashboard(p){
 
 function AppointmentTable({appointments,updateStatus,compact=false}){
   if(!appointments.length) return <EmptyState title="No appointments found" text="Appointments created through the booking workflow will appear here." />;
-  return <div className="table-wrap"><table><thead><tr><th>QUEUE / ID</th><th>CUSTOMER</th><th>SERVICE</th><th>TIME</th><th>STATUS</th><th></th></tr></thead><tbody>{appointments.map(a=><tr key={a.id}><td><strong className="mono">{a.queue}</strong><small className="cell-sub">{a.id}</small></td><td><strong>{a.customer}</strong><small className="cell-sub">{a.phone}</small></td><td>{a.service}<small className="cell-sub">{a.barber}</small></td><td>{a.time}</td><td><Status value={a.status}/></td><td><div className="row-actions">{a.status==="Booked"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"Checked In")}>Check in</button>}{a.status==="Checked In"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"Waiting")}>Add to queue</button>}{a.status==="Waiting"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"In Service")}>Call</button>}{a.status==="In Service"&&<button className="mini-btn success" onClick={()=>updateStatus(a.id,"Completed")}>Complete</button>}{!["Booked","Checked In","Waiting","In Service"].includes(a.status)&&<button className="mini-btn muted" title="No available action">Details</button>}</div></td></tr>)}</tbody></table></div>;
+  return <div className="table-wrap"><table><thead><tr><th>QUEUE / ID</th><th>CUSTOMER</th><th>SERVICE</th><th>TIME</th><th>STATUS</th><th></th></tr></thead><tbody>{appointments.map(a=><tr key={a.id}><td><strong className="mono">{a.queue}</strong><small className="cell-sub">{a.reference || `APT-${String(a.id).slice(0, 8).toUpperCase()}`}</small></td><td><strong>{a.customer}</strong><small className="cell-sub">{a.phone}</small></td><td>{a.service}<small className="cell-sub">{a.barber}</small></td><td>{a.time}</td><td><Status value={a.status}/></td><td><div className="row-actions">{a.status==="Booked"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"Checked In")}>Check in</button>}{a.status==="Checked In"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"Waiting")}>Add to queue</button>}{a.status==="Waiting"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"In Service")}>Call</button>}{a.status==="In Service"&&<button className="mini-btn success" onClick={()=>updateStatus(a.id,"Completed")}>Complete</button>}{!["Booked","Checked In","Waiting","In Service"].includes(a.status)&&<button className="mini-btn muted" title="No available action">Details</button>}</div></td></tr>)}</tbody></table></div>;
 }
 
 function Appointments(p){
@@ -418,14 +449,14 @@ function Queue(p){
   const active=p.appointments.filter(a=>["Waiting","Checked In","In Service"].includes(a.status)).sort((a,b)=>a.queue.localeCompare(b.queue));
   const items=(filter==="Active"?active:p.appointments.filter(a=>a.status===filter)).filter(a=>`${a.customer} ${a.queue} ${a.service}`.toLowerCase().includes(p.search.toLowerCase()));
   const next=active.find(a=>a.status==="Waiting"||a.status==="Checked In");
-  return <><PageTitle title="Live Queue Management" subtitle="Check in customers, call the next customer, and update service status." action={<Button icon={Plus} onClick={()=>p.setModal({type:"walkin"})}>Add Walk-in</Button>}/><div className="queue-layout"><div className="queue-main"><section className="panel"><div className="panel-head"><div><h3>Live Waiting Queue</h3><p>{active.length} active customers</p></div><div className="live-pill"><span></span> LIVE DEMO</div></div><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search queue or customer"/></div><select value={filter} onChange={e=>setFilter(e.target.value)}><option>Active</option>{["Booked","Waiting","Checked In","In Service","Completed","Cancelled"].map(s=><option key={s}>{s}</option>)}</select></div>{items.length?<div className="queue-cards">{items.map(a=><div className={`queue-card ${a.status==="In Service"?"serving":""}`} key={a.id}><div className="queue-card-num">{a.queue}</div><div className="queue-card-info"><strong>{a.customer}</strong><span>{a.service} · {a.barber}</span><small><Clock3 size={12}/>{a.time}</small></div><Status value={a.status}/><div className="queue-card-actions">{a.status==="Booked"&&<Button kind="secondary" onClick={()=>p.updateStatus(a.id,"Checked In")}>Check in</Button>}{a.status==="Checked In"&&<Button onClick={()=>p.updateStatus(a.id,"Waiting")}>Join queue</Button>}{a.status==="Waiting"&&<Button onClick={()=>p.updateStatus(a.id,"In Service")} icon={Scissors}>Call customer</Button>}{a.status==="In Service"&&<Button kind="success" onClick={()=>p.updateStatus(a.id,"Completed")} icon={Check}>Complete</Button>}</div></div>)}</div>:<EmptyState title="No customers in this view" text="Add a walk-in or change the status filter."/>}</section></div><aside className="queue-side"><section className="current-ticket"><span className="eyebrow">NEXT IN LINE</span><div className="ticket-number">{next?.queue||"—"}</div><h3>{next?.customer||"No waiting customers"}</h3><p>{next?next.service:"The queue is currently clear."}</p>{next&&<Button block icon={Scissors} onClick={()=>p.updateStatus(next.id,"In Service")}>Call Next Customer</Button>}<div className="ticket-divider"></div><div className="ticket-stat"><span>Waiting</span><strong>{active.filter(a=>a.status==="Waiting"||a.status==="Checked In").length}</strong></div><div className="ticket-stat"><span>In service</span><strong>{active.filter(a=>a.status==="In Service").length}</strong></div></section><section className="panel"><h3>Queue guidelines</h3><ul className="guidelines"><li>Verify appointment before check-in.</li><li>Only mark “In Service” when the barber is ready.</li><li>Complete service after it is finished.</li><li>Use the POS page to record payment.</li></ul></section></aside></div></>;
+  return <><PageTitle title="Live Queue Management" subtitle="Check in customers, call the next customer, and update service status." action={<Button icon={Plus} onClick={()=>p.setModal({type:"walkin"})}>Add Walk-in</Button>}/><div className="queue-layout"><div className="queue-main"><section className="panel"><div className="panel-head"><div><h3>Live Waiting Queue</h3><p>{active.length} active customers</p></div><div className="live-pill"><span></span> LIVE</div></div><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search queue or customer"/></div><select value={filter} onChange={e=>setFilter(e.target.value)}><option>Active</option>{["Booked","Waiting","Checked In","In Service","Completed","Cancelled"].map(s=><option key={s}>{s}</option>)}</select></div>{items.length?<div className="queue-cards">{items.map(a=><div className={`queue-card ${a.status==="In Service"?"serving":""}`} key={a.id}><div className="queue-card-num">{a.queue}</div><div className="queue-card-info"><strong>{a.customer}</strong><span>{a.service} · {a.barber}</span><small><Clock3 size={12}/>{a.time}</small></div><Status value={a.status}/><div className="queue-card-actions">{a.status==="Booked"&&<Button kind="secondary" onClick={()=>p.updateStatus(a.id,"Checked In")}>Check in</Button>}{a.status==="Checked In"&&<Button onClick={()=>p.updateStatus(a.id,"Waiting")}>Join queue</Button>}{a.status==="Waiting"&&<Button onClick={()=>p.updateStatus(a.id,"In Service")} icon={Scissors}>Call customer</Button>}{a.status==="In Service"&&<Button kind="success" onClick={()=>p.updateStatus(a.id,"Completed")} icon={Check}>Complete</Button>}</div></div>)}</div>:<EmptyState title="No customers in this view" text="Add a walk-in or change the status filter."/>}</section></div><aside className="queue-side"><section className="current-ticket"><span className="eyebrow">NEXT IN LINE</span><div className="ticket-number">{next?.queue||"—"}</div><h3>{next?.customer||"No waiting customers"}</h3><p>{next?next.service:"The queue is currently clear."}</p>{next&&<Button block icon={Scissors} onClick={()=>p.updateStatus(next.id,"In Service")}>Call Next Customer</Button>}<div className="ticket-divider"></div><div className="ticket-stat"><span>Waiting</span><strong>{active.filter(a=>a.status==="Waiting"||a.status==="Checked In").length}</strong></div><div className="ticket-stat"><span>In service</span><strong>{active.filter(a=>a.status==="In Service").length}</strong></div></section><section className="panel"><h3>Queue guidelines</h3><ul className="guidelines"><li>Verify appointment before check-in.</li><li>Only mark “In Service” when the barber is ready.</li><li>Complete service after it is finished.</li><li>Use the POS page to record payment.</li></ul></section></aside></div></>;
 }
 
 function WalkIn(p){
   const [form,setForm]=useState({name:"",phone:"",service:p.services[0]?.name||"",barber:"Unassigned"});
   const change=(k,v)=>setForm(f=>({...f,[k]:v}));
   const selected=p.services.find(s=>s.name===form.service);
-  return <><PageTitle title="Register Walk-in Customer" subtitle="Create a queue ticket for a customer who arrived without an online booking."/><div className="form-page-grid"><section className="panel form-panel"><div className="form-heading"><div className="form-icon"><UserRoundPlus/></div><div><h3>Queue Entry Form</h3><p>Fields marked with * are required.</p></div></div><form onSubmit={e=>{e.preventDefault();p.addWalkIn(form)}} className="form-grid"><label className="full">Customer full name *<input required value={form.name} onChange={e=>change("name",e.target.value)} placeholder="Enter customer's name"/></label><label>Contact number *<input required pattern="[0-9+ ()-]{7,20}" value={form.phone} onChange={e=>change("phone",e.target.value)} placeholder="09XX XXX XXXX"/></label><label>Service *<select value={form.service} onChange={e=>change("service",e.target.value)}>{p.services.filter(s=>s.active).map(s=><option key={s.id}>{s.name}</option>)}</select></label><label className="full">Preferred barber<select value={form.barber} onChange={e=>change("barber",e.target.value)}><option>Unassigned</option>{p.barbers.map(b=><option key={b.id}>{b.name}</option>)}</select></label><div className="form-actions full"><Button kind="secondary" onClick={()=>setForm({name:"",phone:"",service:p.services[0]?.name||"",barber:"Unassigned"})}>Clear</Button><Button icon={QrCode}>Register & Generate Ticket</Button></div></form></section><aside className="ticket-preview panel"><span className="eyebrow">TICKET PREVIEW</span><div className="preview-logo">R</div><h3>ROYAL BARBER SHOP</h3><p>Queue Entry Ticket</p><div className="preview-dash"></div><span className="preview-label">SERVICE</span><strong>{form.service}</strong><span className="preview-label">CUSTOMER</span><strong>{form.name||"Customer name"}</strong><div className="preview-queue">Q-###</div><p className="muted-text">Queue number is assigned when registered.</p><div className="price-line"><span>Estimated service price</span><strong>{money(selected?.price||0)}</strong></div></aside></div></>;
+  return <><PageTitle title="Register Walk-in Customer" subtitle="Create a queue ticket for a customer who arrived without an online booking."/><div className="form-page-grid"><section className="panel form-panel"><div className="form-heading"><div className="form-icon"><UserRoundPlus/></div><div><h3>Queue Entry Form</h3><p>Fields marked with * are required.</p></div></div><form onSubmit={e=>{e.preventDefault();p.addWalkIn(form)}} className="form-grid"><label className="full">Customer full name *<input required value={form.name} onChange={e=>change("name",e.target.value)} placeholder="Enter customer's name"/></label><label>Contact number *<input required pattern="[0-9+ ()-]{7,20}" value={form.phone} onChange={e=>change("phone",e.target.value)} placeholder="09XX XXX XXXX"/></label><label>Service *<select value={form.service} onChange={e=>change("service",e.target.value)}>{p.services.filter(s=>s.active).map(s=><option key={s.id} value={s.name}>{s.name}</option>)}</select></label><label className="full">Preferred barber<select value={form.barber} onChange={e=>change("barber",e.target.value)}><option>Unassigned</option>{p.barbers.map(b=><option key={b.id}>{b.name}</option>)}</select></label><div className="form-actions full"><Button kind="secondary" onClick={()=>setForm({name:"",phone:"",service:p.services[0]?.name||"",barber:"Unassigned"})}>Clear</Button><Button icon={QrCode}>Register & Generate Ticket</Button></div></form></section><aside className="ticket-preview panel"><span className="eyebrow">TICKET PREVIEW</span><div className="preview-logo">R</div><h3>ROYAL BARBER SHOP</h3><p>Queue Entry Ticket</p><div className="preview-dash"></div><span className="preview-label">SERVICE</span><strong>{form.service}</strong><span className="preview-label">CUSTOMER</span><strong>{form.name||"Customer name"}</strong><div className="preview-queue">Q-###</div><p className="muted-text">Queue number is assigned when registered.</p><div className="price-line"><span>Estimated service price</span><strong>{money(selected?.price||0)}</strong></div></aside></div></>;
 }
 
 function Customers(p){
@@ -560,7 +591,7 @@ function SettingsPage({profileName,setProfileName,notify}){
 function Modal({modal,setModal,services,barbers,customers,addWalkIn,notify}){
   const [form,setForm]=useState({name:"",phone:"",service:services.find(s=>s.active)?.name||"",barber:"Unassigned",role:"Barber"});
   const change=(k,v)=>setForm(f=>({...f,[k]:v}));
-  if(modal.type==="walkin")return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal(null)}}><div className="modal"><div className="modal-head"><div><h2>Register Walk-in</h2><p>Create a queue entry for a new arrival.</p></div><button onClick={()=>setModal(null)}><X/></button></div><form onSubmit={e=>{e.preventDefault();addWalkIn(form)}} className="modal-form"><label>Customer name *<input required value={form.name} onChange={e=>change("name",e.target.value)} placeholder="Full name"/></label><label>Phone number *<input required value={form.phone} onChange={e=>change("phone",e.target.value)} placeholder="09XX XXX XXXX"/></label><label>Service<select value={form.service} onChange={e=>change("service",e.target.value)}>{services.filter(s=>s.active).map(s=><option key={s.id}>{s.name}</option>)}</select></label><label>Preferred barber<select value={form.barber} onChange={e=>change("barber",e.target.value)}><option>Unassigned</option>{barbers.map(b=><option key={b.id}>{b.name}</option>)}</select></label><div className="modal-actions"><Button kind="secondary" onClick={()=>setModal(null)}>Cancel</Button><Button icon={QrCode}>Register Customer</Button></div></form></div></div>;
+  if(modal.type==="walkin")return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal(null)}}><div className="modal"><div className="modal-head"><div><h2>Register Walk-in</h2><p>Create a queue entry for a new arrival.</p></div><button onClick={()=>setModal(null)}><X/></button></div><form onSubmit={e=>{e.preventDefault();addWalkIn(form)}} className="modal-form"><label>Customer name *<input required value={form.name} onChange={e=>change("name",e.target.value)} placeholder="Full name"/></label><label>Phone number *<input required value={form.phone} onChange={e=>change("phone",e.target.value)} placeholder="09XX XXX XXXX"/></label><label>Service<select value={form.service} onChange={e=>change("service",e.target.value)}>{services.filter(s=>s.active).map(s=><option key={s.id} value={s.name}>{s.name}</option>)}</select></label><label>Preferred barber<select value={form.barber} onChange={e=>change("barber",e.target.value)}><option>Unassigned</option>{barbers.map(b=><option key={b.id}>{b.name}</option>)}</select></label><div className="modal-actions"><Button kind="secondary" onClick={()=>setModal(null)}>Cancel</Button><Button icon={QrCode}>Register Customer</Button></div></form></div></div>;
   if(modal.type==="customer")return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal(null)}}><div className="modal"><div className="modal-head"><div><h2>Add Customer</h2><p>Create a customer directory entry.</p></div><button onClick={()=>setModal(null)}><X/></button></div><form className="modal-form" onSubmit={e=>{e.preventDefault();if(customers.some(c=>c.phone===form.phone)){notify("A customer with this phone number already exists.");return;}setCustomers(cs=>[{id:`CUS-${String(Date.now()).slice(-5)}`,name:form.name,phone:form.phone,visits:0,lastVisit:"—",status:"Active"},...cs]);setModal(null);notify("Customer added to this browser demo.");}}><label>Full name<input required value={form.name} onChange={e=>change("name",e.target.value)}/></label><label>Phone number<input required value={form.phone} onChange={e=>change("phone",e.target.value)}/></label><div className="modal-actions"><Button kind="secondary" onClick={()=>setModal(null)}>Cancel</Button><Button>Save Customer</Button></div></form></div></div>;
   if(modal.type==="barber")return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal(null)}}><div className="modal"><div className="modal-head"><div><h2>Add Barber</h2><p>Add a barber profile to the roster.</p></div><button onClick={()=>setModal(null)}><X/></button></div><form className="modal-form" onSubmit={e=>{e.preventDefault();setBarbers(bs=>[...bs,{id:Math.max(0,...bs.map(b=>b.id))+1,name:form.name,role:form.role,status:"Available",schedule:"Schedule not configured",today:0}]);notify("Barber added to this browser demo.");setModal(null)}}><label>Full name<input required value={form.name} onChange={e=>change("name",e.target.value)}/></label><label>Role<select value={form.role} onChange={e=>change("role",e.target.value)}><option>Barber</option><option>Senior Barber</option><option>Master Barber</option><option>Manager</option></select></label><div className="modal-actions"><Button kind="secondary" onClick={()=>setModal(null)}>Cancel</Button><Button>Save Barber</Button></div></form></div></div>;
   return null;
