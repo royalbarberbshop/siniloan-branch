@@ -96,8 +96,10 @@ export default function App({ profile, onSignOut }){
       return;
     }
     let cancelled = false;
-    async function loadAppointments() {
-      setAppointmentsLoading(true);
+    let refreshTimer;
+
+    async function loadAppointments(showLoading = false) {
+      if (showLoading) setAppointmentsLoading(true);
       setAppointmentsError("");
       const { data, error } = await supabase
         .from("appointments")
@@ -106,7 +108,8 @@ export default function App({ profile, onSignOut }){
           walk_in_customer:walk_in_customers!appointments_walk_in_customer_id_fkey(full_name, phone),
           service:services!appointments_service_id_fkey(name, price_pesos),
           barber:barbers!appointments_barber_id_fkey(display_name)`)
-        .order("starts_at", { ascending: true });
+        .order("queue_date", { ascending: false })
+        .order("queue_number", { ascending: true });
       if (cancelled) return;
       if (error) {
         setAppointmentsError(error.message);
@@ -123,12 +126,13 @@ export default function App({ profile, onSignOut }){
           id: row.id,
           reference: `APT-${String(row.id).slice(0, 8).toUpperCase()}`,
           queue: `Q-${String(row.queue_number).padStart(3, "0")}`,
+          queueNumber: row.queue_number,
           customer: row.customer?.full_name || row.walk_in_customer?.full_name || "Customer",
           phone: row.customer?.phone || row.walk_in_customer?.phone || "",
           service: row.service?.name || "Service unavailable",
           barber: row.barber?.display_name || "Unassigned",
           date: row.queue_date,
-          time: starts.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" }),
+          time: starts.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Manila" }),
           status: statusLabels[row.status] || row.status,
           amount: Number(row.service?.price_pesos || 0),
           paymentStatus: row.payment_status,
@@ -136,8 +140,24 @@ export default function App({ profile, onSignOut }){
       }));
       setAppointmentsLoading(false);
     }
-    loadAppointments();
-    return () => { cancelled = true; };
+
+    loadAppointments(true);
+
+    // Keep this dashboard synchronized when another admin device registers a
+    // walk-in or changes an appointment's queue status.
+    const channel = supabase
+      .channel("admin-live-appointments")
+      .on("postgres_changes", { event: "*", schema: "public", table: "appointments" }, () => {
+        window.clearTimeout(refreshTimer);
+        refreshTimer = window.setTimeout(() => loadAppointments(false), 180);
+      })
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(refreshTimer);
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   useEffect(()=>localStorage.setItem("royal-customers",JSON.stringify(customers)),[customers]);
@@ -446,10 +466,12 @@ function Appointments(p){
 
 function Queue(p){
   const [filter,setFilter]=useState("Active");
-  const active=p.appointments.filter(a=>["Waiting","Checked In","In Service"].includes(a.status)).sort((a,b)=>a.queue.localeCompare(b.queue));
-  const items=(filter==="Active"?active:p.appointments.filter(a=>a.status===filter)).filter(a=>`${a.customer} ${a.queue} ${a.service}`.toLowerCase().includes(p.search.toLowerCase()));
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const todaysAppointments = p.appointments.filter(a => a.date === today);
+  const active=todaysAppointments.filter(a=>["Waiting","Checked In","In Service"].includes(a.status)).sort((a,b)=>(a.queueNumber||0)-(b.queueNumber||0));
+  const items=(filter==="Active"?active:todaysAppointments.filter(a=>a.status===filter)).filter(a=>`${a.customer} ${a.queue} ${a.service}`.toLowerCase().includes(p.search.toLowerCase()));
   const next=active.find(a=>a.status==="Waiting"||a.status==="Checked In");
-  return <><PageTitle title="Live Queue Management" subtitle="Check in customers, call the next customer, and update service status." action={<Button icon={Plus} onClick={()=>p.setModal({type:"walkin"})}>Add Walk-in</Button>}/><div className="queue-layout"><div className="queue-main"><section className="panel"><div className="panel-head"><div><h3>Live Waiting Queue</h3><p>{active.length} active customers</p></div><div className="live-pill"><span></span> LIVE</div></div><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search queue or customer"/></div><select value={filter} onChange={e=>setFilter(e.target.value)}><option>Active</option>{["Booked","Waiting","Checked In","In Service","Completed","Cancelled"].map(s=><option key={s}>{s}</option>)}</select></div>{items.length?<div className="queue-cards">{items.map(a=><div className={`queue-card ${a.status==="In Service"?"serving":""}`} key={a.id}><div className="queue-card-num">{a.queue}</div><div className="queue-card-info"><strong>{a.customer}</strong><span>{a.service} · {a.barber}</span><small><Clock3 size={12}/>{a.time}</small></div><Status value={a.status}/><div className="queue-card-actions">{a.status==="Booked"&&<Button kind="secondary" onClick={()=>p.updateStatus(a.id,"Checked In")}>Check in</Button>}{a.status==="Checked In"&&<Button onClick={()=>p.updateStatus(a.id,"Waiting")}>Join queue</Button>}{a.status==="Waiting"&&<Button onClick={()=>p.updateStatus(a.id,"In Service")} icon={Scissors}>Call customer</Button>}{a.status==="In Service"&&<Button kind="success" onClick={()=>p.updateStatus(a.id,"Completed")} icon={Check}>Complete</Button>}</div></div>)}</div>:<EmptyState title="No customers in this view" text="Add a walk-in or change the status filter."/>}</section></div><aside className="queue-side"><section className="current-ticket"><span className="eyebrow">NEXT IN LINE</span><div className="ticket-number">{next?.queue||"—"}</div><h3>{next?.customer||"No waiting customers"}</h3><p>{next?next.service:"The queue is currently clear."}</p>{next&&<Button block icon={Scissors} onClick={()=>p.updateStatus(next.id,"In Service")}>Call Next Customer</Button>}<div className="ticket-divider"></div><div className="ticket-stat"><span>Waiting</span><strong>{active.filter(a=>a.status==="Waiting"||a.status==="Checked In").length}</strong></div><div className="ticket-stat"><span>In service</span><strong>{active.filter(a=>a.status==="In Service").length}</strong></div></section><section className="panel"><h3>Queue guidelines</h3><ul className="guidelines"><li>Verify appointment before check-in.</li><li>Only mark “In Service” when the barber is ready.</li><li>Complete service after it is finished.</li><li>Use the POS page to record payment.</li></ul></section></aside></div></>;
+  return <><PageTitle title="Live Queue Management" subtitle="Check in customers, call the next customer, and update service status." action={<Button icon={Plus} onClick={()=>p.setModal({type:"walkin"})}>Add Walk-in</Button>}/>{p.appointmentsLoading&&<div className="notice">Loading today's queue…</div>}{p.appointmentsError&&<div className="notice notice-error">Unable to sync the live queue: {p.appointmentsError}</div>}<div className="queue-layout"><div className="queue-main"><section className="panel"><div className="panel-head"><div><h3>Live Waiting Queue</h3><p>{active.length} active customers</p></div><div className="live-pill"><span></span> LIVE</div></div><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search queue or customer"/></div><select value={filter} onChange={e=>setFilter(e.target.value)}><option>Active</option>{["Booked","Waiting","Checked In","In Service","Completed","Cancelled"].map(s=><option key={s}>{s}</option>)}</select></div>{items.length?<div className="queue-cards">{items.map(a=><div className={`queue-card ${a.status==="In Service"?"serving":""}`} key={a.id}><div className="queue-card-num">{a.queue}</div><div className="queue-card-info"><strong>{a.customer}</strong><span>{a.service} · {a.barber}</span><small><Clock3 size={12}/>{a.time}</small></div><Status value={a.status}/><div className="queue-card-actions">{a.status==="Booked"&&<Button kind="secondary" onClick={()=>p.updateStatus(a.id,"Checked In")}>Check in</Button>}{a.status==="Checked In"&&<Button onClick={()=>p.updateStatus(a.id,"Waiting")}>Join queue</Button>}{a.status==="Waiting"&&<Button onClick={()=>p.updateStatus(a.id,"In Service")} icon={Scissors}>Call customer</Button>}{a.status==="In Service"&&<Button kind="success" onClick={()=>p.updateStatus(a.id,"Completed")} icon={Check}>Complete</Button>}</div></div>)}</div>:<EmptyState title="No customers in this view" text="Add a walk-in or change the status filter."/>}</section></div><aside className="queue-side"><section className="current-ticket"><span className="eyebrow">NEXT IN LINE</span><div className="ticket-number">{next?.queue||"—"}</div><h3>{next?.customer||"No waiting customers"}</h3><p>{next?next.service:"The queue is currently clear."}</p>{next&&<Button block icon={Scissors} onClick={()=>p.updateStatus(next.id,"In Service")}>Call Next Customer</Button>}<div className="ticket-divider"></div><div className="ticket-stat"><span>Waiting</span><strong>{active.filter(a=>a.status==="Waiting"||a.status==="Checked In").length}</strong></div><div className="ticket-stat"><span>In service</span><strong>{active.filter(a=>a.status==="In Service").length}</strong></div></section><section className="panel"><h3>Queue guidelines</h3><ul className="guidelines"><li>Verify appointment before check-in.</li><li>Only mark “In Service” when the barber is ready.</li><li>Complete service after it is finished.</li><li>Use the POS page to record payment.</li></ul></section></aside></div></>;
 }
 
 function WalkIn(p){
