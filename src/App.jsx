@@ -75,7 +75,9 @@ export default function App({ profile, onSignOut }){
   const [page,setPage] = useState("Dashboard");
   const [mobileNav,setMobileNav] = useState(false);
   const [search,setSearch] = useState("");
-  const [appointments,setAppointments] = useState(()=>readStorage("royal-appointments",initialAppointments));
+  const [appointments,setAppointments] = useState([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [appointmentsError, setAppointmentsError] = useState("");
   const [customers,setCustomers] = useState(()=>readStorage("royal-customers",initialCustomers));
   const [barbers,setBarbers] = useState([]);
   const [barbersLoading, setBarbersLoading] = useState(false);
@@ -88,7 +90,54 @@ export default function App({ profile, onSignOut }){
   const [modal,setModal] = useState(null);
   const [profileName,setProfileName] = useState(profile?.full_name || "Shop Administrator");
 
-  useEffect(()=>localStorage.setItem("royal-appointments",JSON.stringify(appointments)),[appointments]);
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setAppointmentsError("Supabase is not configured.");
+      return;
+    }
+    let cancelled = false;
+    async function loadAppointments() {
+      setAppointmentsLoading(true);
+      setAppointmentsError("");
+      const { data, error } = await supabase
+        .from("appointments")
+        .select(`id, starts_at, queue_date, queue_number, status, payment_status,
+          customer:profiles!appointments_customer_id_fkey(full_name, phone),
+          service:services!appointments_service_id_fkey(name, price_pesos),
+          barber:barbers!appointments_barber_id_fkey(display_name)`)
+        .order("starts_at", { ascending: true });
+      if (cancelled) return;
+      if (error) {
+        setAppointmentsError(error.message);
+        setAppointmentsLoading(false);
+        return;
+      }
+      const statusLabels = {
+        booked: "Booked", checked_in: "Checked In", waiting: "Waiting",
+        in_service: "In Service", completed: "Completed", cancelled: "Cancelled", no_show: "No Show"
+      };
+      setAppointments((data || []).map(row => {
+        const starts = new Date(row.starts_at);
+        return {
+          id: row.id,
+          queue: `Q-${String(row.queue_number).padStart(3, "0")}`,
+          customer: row.customer?.full_name || "Customer",
+          phone: row.customer?.phone || "",
+          service: row.service?.name || "Service unavailable",
+          barber: row.barber?.display_name || "Unassigned",
+          date: row.queue_date,
+          time: starts.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" }),
+          status: statusLabels[row.status] || row.status,
+          amount: Number(row.service?.price_pesos || 0),
+          paymentStatus: row.payment_status,
+        };
+      }));
+      setAppointmentsLoading(false);
+    }
+    loadAppointments();
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(()=>localStorage.setItem("royal-customers",JSON.stringify(customers)),[customers]);
     useEffect(()=>localStorage.setItem("royal-sales",JSON.stringify(sales)),[sales]);
   useEffect(() => {
@@ -254,7 +303,19 @@ export default function App({ profile, onSignOut }){
 
   const notify = (message)=>{ setToast(message); window.setTimeout(()=>setToast(""),2800); };
   const navigate = (name)=>{setPage(name);setMobileNav(false);setSearch("");};
-  const updateStatus = (id,status)=>{setAppointments(a=>a.map(x=>x.id===id?{...x,status}:x));notify(`Appointment marked ${status.toLowerCase()}.`);};
+  const updateStatus = async (id, status) => {
+    if (!supabase) { notify("Supabase is not configured."); return; }
+    const statusValues = { "Booked": "booked", "Checked In": "checked_in", "Waiting": "waiting", "In Service": "in_service", "Completed": "completed", "Cancelled": "cancelled", "No Show": "no_show" };
+    const nextStatus = statusValues[status];
+    if (!nextStatus) { notify("Unsupported appointment status."); return; }
+    const { error } = await supabase.rpc("admin_update_appointment_status", {
+      p_appointment_id: id,
+      p_new_status: nextStatus,
+    });
+    if (error) { notify(`Could not update appointment: ${error.message}`); return; }
+    setAppointments(current => current.map(item => item.id === id ? { ...item, status } : item));
+    notify(`Appointment marked ${status.toLowerCase()}.`);
+  };
   const addWalkIn = (form)=>{
   const queueNum = Math.max(0,...appointments.map(a=>Number((a.queue||"Q-000").split("-")[1])||0))+1;
   const service = services.find(s=>s.name===form.service);
@@ -277,6 +338,7 @@ export default function App({ profile, onSignOut }){
   customers, setCustomers,
   barbers, setBarbers,
   services, setServices,
+  appointmentsLoading, appointmentsError,
   servicesLoading, servicesError, saveService,
   barbersLoading, barbersError, saveBarber, updateBarberStatus,
   sales, setSales,
@@ -341,14 +403,14 @@ function Dashboard(p){
 }
 
 function AppointmentTable({appointments,updateStatus,compact=false}){
-  if(!appointments.length) return <EmptyState title="No appointments found" text="Try another search or register a walk-in." />;
+  if(!appointments.length) return <EmptyState title="No appointments found" text="Appointments created through the booking workflow will appear here." />;
   return <div className="table-wrap"><table><thead><tr><th>QUEUE / ID</th><th>CUSTOMER</th><th>SERVICE</th><th>TIME</th><th>STATUS</th><th></th></tr></thead><tbody>{appointments.map(a=><tr key={a.id}><td><strong className="mono">{a.queue}</strong><small className="cell-sub">{a.id}</small></td><td><strong>{a.customer}</strong><small className="cell-sub">{a.phone}</small></td><td>{a.service}<small className="cell-sub">{a.barber}</small></td><td>{a.time}</td><td><Status value={a.status}/></td><td><div className="row-actions">{a.status==="Booked"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"Checked In")}>Check in</button>}{a.status==="Checked In"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"Waiting")}>Add to queue</button>}{a.status==="Waiting"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"In Service")}>Call</button>}{a.status==="In Service"&&<button className="mini-btn success" onClick={()=>updateStatus(a.id,"Completed")}>Complete</button>}{!["Booked","Checked In","Waiting","In Service"].includes(a.status)&&<button className="mini-btn muted" title="No available action">Details</button>}</div></td></tr>)}</tbody></table></div>;
 }
 
 function Appointments(p){
   const [filter,setFilter]=useState("All");
   const items=p.appointments.filter(a=>(filter==="All"||a.status===filter)&&`${a.customer} ${a.queue} ${a.service} ${a.phone}`.toLowerCase().includes(p.search.toLowerCase()));
-  return <><PageTitle title="Appointments & Queue Management" subtitle="Manage bookings, check-ins, and service progress." action={<Button icon={Plus} onClick={()=>p.setModal({type:"walkin"})}>Add Appointment</Button>}/><div className="metrics-grid compact-metrics"><Metric label="Total Bookings" value={p.appointments.length} icon={CalendarDays}/><Metric label="Waiting" value={p.appointments.filter(a=>a.status==="Waiting").length} icon={Clock3} tone="blue"/><Metric label="In Service" value={p.appointments.filter(a=>a.status==="In Service").length} icon={Scissors} tone="purple"/><Metric label="Completed" value={p.appointments.filter(a=>a.status==="Completed").length} icon={Check} tone="green"/></div><section className="panel"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search customer, queue number..."/></div><div className="toolbar-right"><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option>{["Booked","Checked In","Waiting","In Service","Completed","Cancelled"].map(s=><option key={s}>{s}</option>)}</select><button className="btn btn-secondary" onClick={()=>{p.setSearch("");setFilter("All")}}><Filter size={15}/> Reset</button></div></div><AppointmentTable appointments={items} updateStatus={p.updateStatus}/></section></>;
+  return <><PageTitle title="Appointments & Queue Management" subtitle="Manage bookings, check-ins, and service progress." action={<span className="small-note">Bookings are created through the customer booking workflow.</span>}/>{p.appointmentsError&&<div className="notice notice-error">Unable to load appointments: {p.appointmentsError}</div>}{p.appointmentsLoading&&<div className="notice">Loading appointments from Supabase…</div>}<div className="metrics-grid compact-metrics"><Metric label="Total Bookings" value={p.appointments.length} icon={CalendarDays}/><Metric label="Waiting" value={p.appointments.filter(a=>a.status==="Waiting").length} icon={Clock3} tone="blue"/><Metric label="In Service" value={p.appointments.filter(a=>a.status==="In Service").length} icon={Scissors} tone="purple"/><Metric label="Completed" value={p.appointments.filter(a=>a.status==="Completed").length} icon={Check} tone="green"/></div><section className="panel"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search customer, queue number..."/></div><div className="toolbar-right"><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option>{["Booked","Checked In","Waiting","In Service","Completed","Cancelled","No Show"].map(s=><option key={s}>{s}</option>)}</select><button className="btn btn-secondary" onClick={()=>{p.setSearch("");setFilter("All")}}><Filter size={15}/> Reset</button></div></div>{!p.appointmentsLoading&&<AppointmentTable appointments={items} updateStatus={p.updateStatus}/>}</section></>;
 }
 
 function Queue(p){
