@@ -7,3 +7,18 @@
 @media(max-width:420px){.metrics-grid{grid-template-columns:1fr 1fr}.metric-card{flex-direction:column}.metric-copy strong{font-size:16px}.top-actions{gap:4px}.content{padding-left:10px;padding-right:10px}.panel{padding:12px}.days-list{grid-template-columns:1fr}.page-title h1{font-size:18px}.welcome-strip h2{font-size:15px}.summary-cards{gap:7px}.summary-cards>div{padding:10px}}
 
 .pos-cart > .btn, .settings-panel > .btn { width:100%; }
+
+
+/* Supabase-backed service catalog feedback */
+.notice {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.notice-error {
+  color: #8f302b;
+  background: #fff0ee;
+  border: 1px solid #f1c8c3;
+}

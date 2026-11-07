@@ -71,26 +71,25 @@ function EmptyState({title="Nothing here yet",text="New records will appear here
   return <div className="empty-state"><CircleHelp size={25}/><strong>{title}</strong><span>{text}</span></div>;
 }
 
-export default function App(){
+export default function App({ profile, onSignOut }){
   const [page,setPage] = useState("Dashboard");
   const [mobileNav,setMobileNav] = useState(false);
   const [search,setSearch] = useState("");
   const [appointments,setAppointments] = useState(()=>readStorage("royal-appointments",initialAppointments));
   const [customers,setCustomers] = useState(()=>readStorage("royal-customers",initialCustomers));
   const [barbers,setBarbers] = useState(()=>readStorage("royal-barbers",initialBarbers));
-  const [services,setServices] = useState(()=>readStorage("royal-services",initialServices));
+  const [services,setServices] = useState([]);
   const [servicesLoading, setServicesLoading] = useState(false);
   const [servicesError, setServicesError] = useState("");
   const [sales,setSales] = useState(()=>readStorage("royal-sales",initialSales));
   const [toast,setToast] = useState("");
   const [modal,setModal] = useState(null);
-  const [profileName,setProfileName] = useState("Shop Administrator");
+  const [profileName,setProfileName] = useState(profile?.full_name || "Shop Administrator");
 
   useEffect(()=>localStorage.setItem("royal-appointments",JSON.stringify(appointments)),[appointments]);
   useEffect(()=>localStorage.setItem("royal-customers",JSON.stringify(customers)),[customers]);
   useEffect(()=>localStorage.setItem("royal-barbers",JSON.stringify(barbers)),[barbers]);
-  useEffect(()=>localStorage.setItem("royal-services",JSON.stringify(services)),[services]);
-  useEffect(()=>localStorage.setItem("royal-sales",JSON.stringify(sales)),[sales]);
+    useEffect(()=>localStorage.setItem("royal-sales",JSON.stringify(sales)),[sales]);
   useEffect(() => {
   if (!isSupabaseConfigured || !supabase) return;
 
@@ -102,7 +101,7 @@ export default function App(){
 
     const { data, error } = await supabase
       .from("services")
-      .select("id, name, description, duration_minutes, price_pesos, is_active")
+      .select("id, name, description, category, duration_minutes, price_pesos, is_active")
       .order("name");
 
     if (cancelled) return;
@@ -117,7 +116,7 @@ export default function App(){
       data.map(service => ({
         id: service.id,
         name: service.name,
-        category: "Other",
+        category: service.category || "Other",
         duration: service.duration_minutes,
         price: Number(service.price_pesos),
         active: service.is_active,
@@ -134,6 +133,58 @@ export default function App(){
     cancelled = true;
   };
 }, []);
+
+  const saveService = async (draft, editingId) => {
+    if (!supabase) {
+      throw new Error("Supabase is not configured.");
+    }
+
+    const payload = {
+      name: draft.name.trim(),
+      description: (draft.description || "").trim() || null,
+      category: draft.category || "Other",
+      duration_minutes: Number(draft.duration),
+      price_pesos: Number(draft.price),
+      is_active: Boolean(draft.active),
+    };
+
+    if (!payload.name) throw new Error("Enter a service name.");
+    if (!Number.isInteger(payload.duration_minutes) || payload.duration_minutes < 5 || payload.duration_minutes > 360) {
+      throw new Error("Duration must be between 5 and 360 minutes.");
+    }
+    if (!Number.isFinite(payload.price_pesos) || payload.price_pesos < 0) {
+      throw new Error("Enter a valid service price.");
+    }
+
+    const query = editingId
+      ? supabase.from("services").update(payload).eq("id", editingId)
+      : supabase.from("services").insert(payload);
+
+    const { data, error } = await query
+      .select("id, name, description, category, duration_minutes, price_pesos, is_active")
+      .single();
+
+    if (error) throw error;
+
+    const saved = {
+      id: data.id,
+      name: data.name,
+      description: data.description || "",
+      category: data.category || "Other",
+      duration: data.duration_minutes,
+      price: Number(data.price_pesos),
+      active: data.is_active,
+    };
+
+    setServices(current => {
+      const next = editingId
+        ? current.map(item => item.id === editingId ? saved : item)
+        : [...current, saved];
+      return next.sort((a, b) => a.name.localeCompare(b.name));
+    });
+
+    return saved;
+  };
 
   const notify = (message)=>{ setToast(message); window.setTimeout(()=>setToast(""),2800); };
   const navigate = (name)=>{setPage(name);setMobileNav(false);setSearch("");};
@@ -160,7 +211,7 @@ export default function App(){
   customers, setCustomers,
   barbers, setBarbers,
   services, setServices,
-  servicesLoading, servicesError,
+  servicesLoading, servicesError, saveService,
   sales, setSales,
   search, setSearch,
   notify, setModal,
@@ -171,7 +222,7 @@ export default function App(){
       <div className="brand"><div className="brand-mark">R</div><div><strong>ROYAL</strong><span>BARBER SHOP</span></div><button className="mobile-close" onClick={()=>setMobileNav(false)}><X size={18}/></button></div>
       <div className="shop-label"><span className="online-dot"></span> SHOP MANAGEMENT</div>
       <nav>{navGroups.map(group=><div className="nav-group" key={group.label}><div className="nav-label">{group.label}</div>{group.items.map(([name,Icon])=><button key={name} className={`nav-item ${currentPage===name?"active":""}`} onClick={()=>navigate(name)}><Icon size={17}/><span>{name}</span>{name==="Live Queue"&&<em>{appointments.filter(a=>["Waiting","Checked In"].includes(a.status)).length}</em>}</button>)}</div>)}</nav>
-      <div className="sidebar-bottom"><div className="user-avatar">SA</div><div className="user-meta"><strong>{profileName}</strong><span>Administrator</span></div><button title="Sign out (demo)" onClick={()=>notify("Demo mode: authentication is not connected.")}><LogOut size={16}/></button></div>
+      <div className="sidebar-bottom"><div className="user-avatar">SA</div><div className="user-meta"><strong>{profileName}</strong><span>Administrator</span></div><button title="Sign out" onClick={onSignOut}><LogOut size={16}/></button></div>
     </aside>
     {mobileNav && <div className="scrim" onClick={()=>setMobileNav(false)}></div>}
     <main className="main-area">
@@ -259,9 +310,46 @@ function Barbers(p){
 
 function Services(p){
   const [editing,setEditing]=useState(null);
-  const [draft,setDraft]=useState({name:"",category:"Haircut",duration:30,price:150,active:true});
-  const save=()=>{if(!draft.name.trim()||Number(draft.price)<0)return;if(editing){p.setServices(ss=>ss.map(s=>s.id===editing?{...draft,id:editing,price:Number(draft.price),duration:Number(draft.duration)}:s));}else p.setServices(ss=>[...ss,{...draft,id:Math.max(0,...ss.map(s=>s.id))+1,price:Number(draft.price),duration:Number(draft.duration)}]);setEditing(null);setDraft({name:"",category:"Haircut",duration:30,price:150,active:true});p.notify("Service saved in this demo.");};
-  return <><PageTitle title="Services & Pricing" subtitle="Maintain the services offered by the shop and their current prices." action={<Button icon={Plus} onClick={()=>{setEditing(null);setDraft({name:"",category:"Haircut",duration:30,price:150,active:true})}}>Add Service</Button>}/><div className="service-layout"><section className="panel"><div className="panel-head"><div><h3>Service Catalog</h3><p>{p.services.length} services configured</p></div></div><div className="table-wrap"><table><thead><tr><th>SERVICE</th><th>CATEGORY</th><th>DURATION</th><th>PRICE</th><th>STATUS</th><th></th></tr></thead><tbody>{p.services.map(s=><tr key={s.id}><td><strong>{s.name}</strong></td><td>{s.category}</td><td>{s.duration} min</td><td><strong>{money(s.price)}</strong></td><td><Status value={s.active?"Active":"Inactive"}/></td><td><button className="mini-btn" onClick={()=>{setEditing(s.id);setDraft({...s})}}>Edit</button></td></tr>)}</tbody></table></div></section><section className="panel service-editor"><h3>{editing?"Edit Service":"New Service"}</h3><p className="muted-text">Changes affect future bookings and POS selections.</p><label>Service name<input value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))} placeholder="e.g. Classic Haircut"/></label><label>Category<select value={draft.category} onChange={e=>setDraft(d=>({...d,category:e.target.value}))}><option>Haircut</option><option>Grooming</option><option>Package</option><option>Other</option></select></label><div className="two-fields"><label>Duration (minutes)<input type="number" min="5" value={draft.duration} onChange={e=>setDraft(d=>({...d,duration:e.target.value}))}/></label><label>Price (PHP)<input type="number" min="0" step="0.01" value={draft.price} onChange={e=>setDraft(d=>({...d,price:e.target.value}))}/></label></div><label className="check-label"><input type="checkbox" checked={draft.active} onChange={e=>setDraft(d=>({...d,active:e.target.checked}))}/> Service is active</label><Button block icon={Save} onClick={save}>Save Service</Button>{editing&&<Button block kind="secondary" onClick={()=>{setEditing(null);setDraft({name:"",category:"Haircut",duration:30,price:150,active:true})}}>Cancel Edit</Button>}</section></div></>;
+  const [saving,setSaving]=useState(false);
+  const [formError,setFormError]=useState("");
+  const emptyDraft={name:"",description:"",category:"Haircut",duration:30,price:150,active:true};
+  const [draft,setDraft]=useState(emptyDraft);
+  const reset=()=>{setEditing(null);setDraft(emptyDraft);setFormError("");};
+  const save=async()=>{
+    setFormError("");
+    setSaving(true);
+    try{
+      await p.saveService(draft,editing);
+      reset();
+      p.notify(editing?"Service updated in Supabase.":"Service added to Supabase.");
+    }catch(error){
+      setFormError(error?.message||"Unable to save this service. Please try again.");
+    }finally{
+      setSaving(false);
+    }
+  };
+  return <><PageTitle title="Services & Pricing" subtitle="Manage the shop's service catalog and prices stored in Supabase." action={<Button icon={Plus} onClick={reset}>Add Service</Button>}/>
+    {p.servicesError&&<div className="notice notice-error" role="alert">Unable to load services: {p.servicesError}</div>}
+    <div className="service-layout">
+      <section className="panel">
+        <div className="panel-head"><div><h3>Service Catalog</h3><p>{p.services.length} services configured in the database</p></div></div>
+        {p.servicesLoading?<div className="empty-state">Loading services from Supabase…</div>:p.services.length===0?<EmptyState title="No services added yet" text="Add your shop's first service using the form."/>:
+        <div className="table-wrap"><table><thead><tr><th>SERVICE</th><th>CATEGORY</th><th>DURATION</th><th>PRICE</th><th>STATUS</th><th></th></tr></thead><tbody>{p.services.map(s=><tr key={s.id}><td><strong>{s.name}</strong>{s.description&&<small className="muted-text" style={{display:"block"}}>{s.description}</small>}</td><td>{s.category}</td><td>{s.duration} min</td><td><strong>{money(s.price)}</strong></td><td><Status value={s.active?"Active":"Inactive"}/></td><td><button className="mini-btn" onClick={()=>{setEditing(s.id);setDraft({...s});setFormError("");}}>Edit</button></td></tr>)}</tbody></table></div>}
+      </section>
+      <section className="panel service-editor">
+        <h3>{editing?"Edit Service":"New Service"}</h3>
+        <p className="muted-text">Changes are saved directly to your Supabase database.</p>
+        <label>Service name<input value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))} placeholder="e.g. Classic Haircut" maxLength={120}/></label>
+        <label>Description (optional)<input value={draft.description||""} onChange={e=>setDraft(d=>({...d,description:e.target.value}))} placeholder="Short service description" maxLength={500}/></label>
+        <label>Category<select value={draft.category} onChange={e=>setDraft(d=>({...d,category:e.target.value}))}><option>Haircut</option><option>Grooming</option><option>Package</option><option>Other</option></select></label>
+        <div className="two-fields"><label>Duration (minutes)<input type="number" min="5" max="360" step="1" value={draft.duration} onChange={e=>setDraft(d=>({...d,duration:e.target.value}))}/></label><label>Price (PHP)<input type="number" min="0" step="0.01" value={draft.price} onChange={e=>setDraft(d=>({...d,price:e.target.value}))}/></label></div>
+        <label className="check-label"><input type="checkbox" checked={draft.active} onChange={e=>setDraft(d=>({...d,active:e.target.checked}))}/> Service is active</label>
+        {formError&&<div className="notice notice-error" role="alert">{formError}</div>}
+        <Button block icon={Save} onClick={save} disabled={saving||p.servicesLoading}>{saving?"Saving…":"Save Service"}</Button>
+        {editing&&<Button block kind="secondary" onClick={reset} disabled={saving}>Cancel Edit</Button>}
+      </section>
+    </div>
+  </>;
 }
 
 function POS(p){
