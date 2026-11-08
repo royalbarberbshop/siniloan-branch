@@ -22,3 +22,4 @@
   background: #fff0ee;
   border: 1px solid #f1c8c3;
 }
+.report-filter-panel{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:15px}.report-filter-panel>div{display:flex;flex-direction:column;gap:4px}.report-filter-panel strong{font-size:11px;color:#303a49}.report-filter-panel select{min-width:160px;border:1px solid #e0e3e7;border-radius:6px;padding:9px 11px;background:#fff;color:#354052;font-size:10px}
