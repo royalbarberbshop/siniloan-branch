@@ -188,6 +188,7 @@ export default function App({ profile, onSignOut }){
         id: `TRX-${String(row.id).slice(0, 8).toUpperCase()}`,
         databaseId: row.id,
         appointmentId: row.appointment_id,
+        createdAt: row.created_at,
         time: new Date(row.created_at).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Manila" }),
         customer: row.customer_name_snapshot || row.customer?.full_name || "Walk-in Customer",
         service: row.service_name_snapshot,
@@ -697,10 +698,87 @@ function POS(p){
 }
 
 function Sales(p){
-  const total=p.sales.reduce((n,s)=>n+s.amount,0);
   const [paymentFilter,setPaymentFilter]=useState("All");
-  const rows=p.sales.filter(s=>(paymentFilter==="All"||s.payment===paymentFilter)&&`${s.id} ${s.customer} ${s.service}`.toLowerCase().includes(p.search.toLowerCase()));
-  return <><PageTitle title="Sales & Cash Drawer" subtitle="Review payments recorded by the admin POS." action={<Button icon={Download} kind="secondary" onClick={()=>downloadCSV(p.sales,"royal-barber-sales.csv")}>Export CSV</Button>}/><div className="metrics-grid"><Metric label="Recorded Sales" value={p.sales.length} icon={ReceiptText}/><Metric label="Recorded Revenue" value={money(total)} icon={CircleDollarSign} tone="green"/><Metric label="Cash Payments" value={money(p.sales.filter(s=>s.payment==="Cash").reduce((n,s)=>n+s.amount,0))} icon={Banknote} tone="blue"/><Metric label="GCash Payments" value={money(p.sales.filter(s=>s.payment==="GCash").reduce((n,s)=>n+s.amount,0))} icon={CreditCard} tone="purple"/></div><section className="panel"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search transaction or customer"/></div><select value={paymentFilter} onChange={e=>setPaymentFilter(e.target.value)}><option>All</option><option>Cash</option><option>GCash</option><option>Card</option><option>Other</option></select></div>{p.salesLoading&&<div className="notice">Loading transactions…</div>}{p.salesError&&<div className="notice notice-error">{p.salesError}</div>}<div className="table-wrap"><table><thead><tr><th>TRANSACTION ID</th><th>TIME</th><th>CUSTOMER</th><th>SERVICE</th><th>PAYMENT</th><th>AMOUNT</th><th>STATUS</th></tr></thead><tbody>{rows.map(s=><tr key={s.id}><td className="mono">{s.id}</td><td>{s.time}</td><td>{s.customer}</td><td>{s.service}</td><td><span className="payment-tag">{s.payment}</span></td><td><strong>{money(s.amount)}</strong></td><td><Status value={s.status}/></td></tr>)}</tbody></table></div></section></>;
+  const [dateFilter,setDateFilter]=useState(todayISO());
+  const [session,setSession]=useState(null);
+  const [movements,setMovements]=useState([]);
+  const [drawerLoading,setDrawerLoading]=useState(true);
+  const [drawerError,setDrawerError]=useState("");
+  const [openingCash,setOpeningCash]=useState("0");
+  const [movementType,setMovementType]=useState("cash_in");
+  const [movementAmount,setMovementAmount]=useState("");
+  const [movementReason,setMovementReason]=useState("");
+  const [actualCash,setActualCash]=useState("");
+  const [lastClosed,setLastClosed]=useState(null);
+  const [busy,setBusy]=useState(false);
+
+  const loadDrawer=async()=>{
+    if(!supabase||!isSupabaseConfigured){setDrawerError("Supabase is not configured.");setDrawerLoading(false);return;}
+    setDrawerLoading(true);setDrawerError("");
+    const {data:openData,error:openError}=await supabase.from("cash_drawer_sessions").select("id,opened_at,opening_cash_pesos,status,expected_cash_pesos,actual_cash_pesos,closed_at").eq("status","open").maybeSingle();
+    if(openError){setDrawerError(openError.message);setDrawerLoading(false);return;}
+    setSession(openData||null);
+    let movementSessionId=openData?.id||null;
+    if(!openData){const {data:closedData}=await supabase.from("cash_drawer_sessions").select("id,closed_at,expected_cash_pesos,actual_cash_pesos,discrepancy_pesos").eq("status","closed").order("closed_at",{ascending:false}).limit(1).maybeSingle();setLastClosed(closedData||null);movementSessionId=closedData?.id||null;}else{setLastClosed(null);}
+    if(movementSessionId){
+      const {data:movementData,error:movementError}=await supabase.from("cash_drawer_movements").select("id,movement_type,amount_pesos,reason,created_at").eq("session_id",movementSessionId).order("created_at",{ascending:false});
+      if(movementError)setDrawerError(movementError.message);else setMovements(movementData||[]);
+    }else setMovements([]);
+    setDrawerLoading(false);
+  };
+  useEffect(()=>{loadDrawer();},[]);
+
+  const manilaDate=(value)=>new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Manila",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(value));
+  const dateRows=p.sales.filter(s=>!dateFilter||(s.createdAt&&manilaDate(s.createdAt)===dateFilter));
+  const rows=dateRows.filter(s=>(paymentFilter==="All"||s.payment===paymentFilter)&&`${s.id} ${s.customer} ${s.service}`.toLowerCase().includes(p.search.toLowerCase()));
+  const total=dateRows.reduce((n,s)=>n+s.amount,0);
+  const sessionCashSales=session?p.sales.filter(s=>s.payment==="Cash"&&s.status==="Completed"&&s.createdAt&&new Date(s.createdAt)>=new Date(session.opened_at)).reduce((n,s)=>n+s.amount,0):0;
+  const cashSales=dateRows.filter(s=>s.payment==="Cash"&&s.status==="Completed").reduce((n,s)=>n+s.amount,0);
+  const expectedCash=session?Number(session.opening_cash_pesos||0)+sessionCashSales+movements.filter(m=>m.movement_type==="cash_in").reduce((n,m)=>n+Number(m.amount_pesos),0)-movements.filter(m=>m.movement_type==="cash_out").reduce((n,m)=>n+Number(m.amount_pesos),0):0;
+  const runRpc=async(name,args,success)=>{
+    setBusy(true);setDrawerError("");
+    const {data,error}=await supabase.rpc(name,args);
+    if(!error&&name==="admin_close_cash_drawer")setLastClosed(data||null);
+    setBusy(false);
+    if(error){setDrawerError(error.message);return;}
+    p.notify(success);await loadDrawer();
+  };
+  const openDrawer=async()=>{
+    const amount=Number(openingCash);
+    if(!Number.isFinite(amount)||amount<0){setDrawerError("Enter a valid opening cash amount.");return;}
+    await runRpc("admin_open_cash_drawer",{p_opening_cash_pesos:amount},"Cash drawer opened.");
+  };
+  const addMovement=async()=>{
+    const amount=Number(movementAmount);
+    if(!Number.isFinite(amount)||amount<=0||!movementReason.trim()){setDrawerError("Enter a valid amount and reason.");return;}
+    await runRpc("admin_record_cash_movement",{p_movement_type:movementType,p_amount_pesos:amount,p_reason:movementReason.trim()},"Cash movement recorded.");
+    setMovementAmount("");setMovementReason("");
+  };
+  const closeDrawer=async()=>{
+    const amount=Number(actualCash);
+    if(!Number.isFinite(amount)||amount<0){setDrawerError("Enter the actual cash counted before closing.");return;}
+    await runRpc("admin_close_cash_drawer",{p_actual_cash_pesos:amount},"Cash drawer closed and reconciled.");
+  };
+  return <>
+    <PageTitle title="Sales & Cash Drawer" subtitle="Review recorded payments and reconcile physical cash." action={<Button icon={Download} kind="secondary" onClick={()=>downloadCSV(rows,"royal-barber-sales.csv")}>Export CSV</Button>}/>
+    <div className="table-toolbar" style={{marginBottom:14}}><label>Sales date<input type="date" value={dateFilter} onChange={e=>setDateFilter(e.target.value)}/></label><span className="muted-text">Showing {dateRows.length} transaction(s) for {dateFilter||"all dates"}</span></div>
+    <div className="metrics-grid"><Metric label="Recorded Sales" value={dateRows.length} icon={ReceiptText}/><Metric label="Recorded Revenue" value={money(total)} icon={CircleDollarSign} tone="green"/><Metric label="Cash Payments" value={money(cashSales)} icon={Banknote} tone="blue"/><Metric label="Non-cash Payments" value={money(dateRows.filter(s=>s.payment!=="Cash"&&s.status==="Completed").reduce((n,s)=>n+s.amount,0))} icon={CreditCard} tone="purple"/></div>
+    <section className="panel" style={{marginBottom:15}}>
+      <div className="panel-head"><div><h3>Cash Drawer Session</h3><p>Only cash transactions affect expected physical cash. GCash and card payments are excluded.</p></div><Status value={session?"Open":"Closed"}/></div>
+      {drawerLoading&&<div className="notice">Loading cash drawer…</div>}
+      {drawerError&&<div className="notice notice-error">{drawerError}</div>}
+      {!drawerLoading&&!session&&lastClosed&&<div className="notice">Last drawer closed: expected {money(Number(lastClosed.expected_cash_pesos))}, counted {money(Number(lastClosed.actual_cash_pesos))}, difference {money(Number(lastClosed.discrepancy_pesos))}.</div>}
+      {!drawerLoading&&!session&&<div className="two-fields"><label>Opening cash balance (₱)<input type="number" min="0" step="0.01" value={openingCash} onChange={e=>setOpeningCash(e.target.value)}/></label><div style={{display:"flex",alignItems:"end"}}><Button icon={Banknote} disabled={busy} onClick={openDrawer}>Open Cash Drawer</Button></div></div>}
+      {session&&<>
+        <div className="metrics-grid"><Metric label="Opening Cash" value={money(Number(session.opening_cash_pesos))} icon={Banknote}/><Metric label="Cash Sales This Session" value={money(sessionCashSales)} icon={TrendingUp} tone="green"/><Metric label="Cash Movements" value={money(movements.reduce((n,m)=>n+(m.movement_type==="cash_in"?1:-1)*Number(m.amount_pesos),0))} icon={ArrowUpRight} tone="blue"/><Metric label="Expected Cash" value={money(expectedCash)} icon={CircleDollarSign} tone="green"/></div>
+        <div className="two-fields"><label>Movement type<select value={movementType} onChange={e=>setMovementType(e.target.value)}><option value="cash_in">Cash In</option><option value="cash_out">Cash Out</option></select></label><label>Amount (₱)<input type="number" min="0.01" step="0.01" value={movementAmount} onChange={e=>setMovementAmount(e.target.value)}/></label><label>Reason<input value={movementReason} onChange={e=>setMovementReason(e.target.value)} placeholder="e.g. Petty cash / supplies"/></label><div style={{display:"flex",alignItems:"end"}}><Button kind="secondary" disabled={busy} onClick={addMovement}>Record Cash Movement</Button></div></div>
+        <div className="two-fields" style={{marginTop:14}}><label>Actual cash counted (₱)<input type="number" min="0" step="0.01" value={actualCash} onChange={e=>setActualCash(e.target.value)} placeholder="Count cash in drawer"/></label><div style={{display:"flex",alignItems:"end"}}><Button kind="danger" disabled={busy} onClick={closeDrawer}>Close & Reconcile Drawer</Button></div></div>
+        <p className="small-note" style={{marginTop:10}}>Closing records the actual counted cash and calculates the difference from expected cash. A closed session is retained for audit.</p>
+      </>}
+      {movements.length>0&&<div className="table-wrap" style={{marginTop:16}}><table><thead><tr><th>TIME</th><th>TYPE</th><th>REASON</th><th>AMOUNT</th></tr></thead><tbody>{movements.map(m=><tr key={m.id}><td>{new Date(m.created_at).toLocaleString("en-PH",{timeZone:"Asia/Manila"})}</td><td>{m.movement_type.replace("_"," ").toUpperCase()}</td><td>{m.reason}</td><td><strong>{money(Number(m.amount_pesos))}</strong></td></tr>)}</tbody></table></div>}
+    </section>
+    <section className="panel"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search transaction or customer"/></div><select value={paymentFilter} onChange={e=>setPaymentFilter(e.target.value)}><option>All</option><option>Cash</option><option>GCash</option><option>Card</option><option>Other</option></select></div>{p.salesLoading&&<div className="notice">Loading transactions…</div>}{p.salesError&&<div className="notice notice-error">{p.salesError}</div>}<div className="table-wrap"><table><thead><tr><th>TRANSACTION ID</th><th>TIME</th><th>CUSTOMER</th><th>SERVICE</th><th>PAYMENT</th><th>AMOUNT</th><th>STATUS</th></tr></thead><tbody>{rows.map(s=><tr key={s.id}><td className="mono">{s.id}</td><td>{s.time}</td><td>{s.customer}</td><td>{s.service}</td><td><span className="payment-tag">{s.payment}</span></td><td><strong>{money(s.amount)}</strong></td><td><Status value={s.status}/></td></tr>)}</tbody></table>{!rows.length&&!p.salesLoading&&<EmptyState title="No transactions found" text="Try another date or payment filter."/>}</div></section>
+  </>;
 }
 function downloadCSV(rows,filename){
  const cols=["id","time","customer","service","barber","amount","payment","status"];
@@ -711,7 +789,7 @@ function Reports(p){
   const total=p.sales.reduce((n,s)=>n+s.amount,0);
   const max=Math.max(1,...p.sales.map(s=>s.amount));
   const serviceCounts=p.sales.reduce((acc,s)=>{acc[s.service]=(acc[s.service]||0)+1;return acc;},{});
-  return <><PageTitle title="Reports & Analytics" subtitle="Review recorded transactions and operational activity." action={<Button icon={Download} kind="secondary" onClick={()=>downloadCSV(p.sales,"royal-barber-report.csv")}>Export Report</Button>}/><div className="metrics-grid"><Metric label="Gross Recorded Sales" value={money(total)} icon={CircleDollarSign} tone="green"/><Metric label="Transactions" value={p.sales.length} icon={ReceiptText}/><Metric label="Appointments" value={p.appointments.length} icon={CalendarDays} tone="blue"/><Metric label="Registered Customers" value={p.customers.length} icon={Users} tone="purple"/></div><div className="reports-grid"><section className="panel"><div className="panel-head"><div><h3>Sales by Transaction</h3><p>Recorded POS transactions</p></div></div><div className="bar-chart">{p.sales.slice(0,8).reverse().map((s,i)=><div className="chart-col" key={s.id}><div className="chart-value">{Math.round(s.amount)}</div><div className="chart-bar" style={{height:`${Math.max(8,s.amount/max*100)}%`}}></div><span>{s.id.slice(-3)}</span></div>)}</div><div className="chart-legend"><span></span>Recorded sales (PHP)</div></section><section className="panel"><h3>Service Breakdown</h3><p className="muted-text">Count by service description</p><div className="breakdown-list">{Object.entries(serviceCounts).map(([name,count])=><div className="breakdown-row" key={name}><div><span>{name}</span><strong>{count}</strong></div><div className="progress-track"><span style={{width:`${count/Math.max(1,...Object.values(serviceCounts))*100}%`}}></span></div></div>)}</div></section><section className="panel span-two"><div className="panel-head"><div><h3>Operational Summary</h3><p>Current record counts</p></div></div><div className="summary-cards"><div><span>Waiting</span><strong>{p.appointments.filter(a=>a.status==="Waiting").length}</strong></div><div><span>In service</span><strong>{p.appointments.filter(a=>a.status==="In Service").length}</strong></div><div><span>Completed appointments</span><strong>{p.appointments.filter(a=>a.status==="Completed").length}</strong></div><div><span>Active barbers</span><strong>{p.barbers.length}</strong></div></div><p className="small-note"><CircleAlert size={14}/> Reports reflect transactions recorded in Supabase. Cash drawer reconciliation is a separate phase.</p></section></div></>;
+  return <><PageTitle title="Reports & Analytics" subtitle="Review recorded transactions and operational activity." action={<Button icon={Download} kind="secondary" onClick={()=>downloadCSV(p.sales,"royal-barber-report.csv")}>Export Report</Button>}/><div className="metrics-grid"><Metric label="Gross Recorded Sales" value={money(total)} icon={CircleDollarSign} tone="green"/><Metric label="Transactions" value={p.sales.length} icon={ReceiptText}/><Metric label="Appointments" value={p.appointments.length} icon={CalendarDays} tone="blue"/><Metric label="Registered Customers" value={p.customers.length} icon={Users} tone="purple"/></div><div className="reports-grid"><section className="panel"><div className="panel-head"><div><h3>Sales by Transaction</h3><p>Recorded POS transactions</p></div></div><div className="bar-chart">{p.sales.slice(0,8).reverse().map((s,i)=><div className="chart-col" key={s.id}><div className="chart-value">{Math.round(s.amount)}</div><div className="chart-bar" style={{height:`${Math.max(8,s.amount/max*100)}%`}}></div><span>{s.id.slice(-3)}</span></div>)}</div><div className="chart-legend"><span></span>Recorded sales (PHP)</div></section><section className="panel"><h3>Service Breakdown</h3><p className="muted-text">Count by service description</p><div className="breakdown-list">{Object.entries(serviceCounts).map(([name,count])=><div className="breakdown-row" key={name}><div><span>{name}</span><strong>{count}</strong></div><div className="progress-track"><span style={{width:`${count/Math.max(1,...Object.values(serviceCounts))*100}%`}}></span></div></div>)}</div></section><section className="panel span-two"><div className="panel-head"><div><h3>Operational Summary</h3><p>Current record counts</p></div></div><div className="summary-cards"><div><span>Waiting</span><strong>{p.appointments.filter(a=>a.status==="Waiting").length}</strong></div><div><span>In service</span><strong>{p.appointments.filter(a=>a.status==="In Service").length}</strong></div><div><span>Completed appointments</span><strong>{p.appointments.filter(a=>a.status==="Completed").length}</strong></div><div><span>Active barbers</span><strong>{p.barbers.length}</strong></div></div><p className="small-note"><CircleAlert size={14}/> Reports reflect POS transactions recorded in Supabase. Cash drawer reconciliation is handled in Sales & Cash Drawer.</p></section></div></>;
 }
 
 function SettingsPage({profileName,setProfileName,notify}){
