@@ -18,7 +18,7 @@ const initialAppointments = [
   { id:"APT-006", queue:"Q-006", customer:"Ethan Mendoza", phone:"0922 789 6006", service:"Premium Haircut", barber:"Mark Reyes", date:todayISO(), time:"11:30 AM", status:"Cancelled", amount:250 },
   { id:"APT-007", queue:"Q-007", customer:"Gabriel Torres", phone:"0923 890 7007", service:"Classic Haircut", barber:"Simon Lopez", date:todayISO(), time:"01:00 PM", status:"Waiting", amount:150 },
 ];
-function todayISO(){ return new Date().toISOString().slice(0,10); }
+function todayISO(){ return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 const initialServices = [
   {id:1,name:"Classic Haircut",category:"Haircut",duration:30,price:150,active:true},
   {id:2,name:"Fade Haircut",category:"Haircut",duration:40,price:200,active:true},
@@ -85,7 +85,9 @@ export default function App({ profile, onSignOut }){
   const [services,setServices] = useState([]);
   const [servicesLoading, setServicesLoading] = useState(false);
   const [servicesError, setServicesError] = useState("");
-  const [sales,setSales] = useState(()=>readStorage("royal-sales",initialSales));
+  const [sales,setSales] = useState([]);
+  const [salesLoading,setSalesLoading] = useState(false);
+  const [salesError,setSalesError] = useState("");
   const [toast,setToast] = useState("");
   const [modal,setModal] = useState(null);
   const [profileName,setProfileName] = useState(profile?.full_name || "Shop Administrator");
@@ -162,7 +164,53 @@ export default function App({ profile, onSignOut }){
   }, []);
 
   useEffect(()=>localStorage.setItem("royal-customers",JSON.stringify(customers)),[customers]);
-    useEffect(()=>localStorage.setItem("royal-sales",JSON.stringify(sales)),[sales]);
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setSalesError("Supabase is not configured.");
+      return;
+    }
+    let cancelled = false;
+    let refreshTimer;
+    async function loadSales(showLoading = false) {
+      if (showLoading) setSalesLoading(true);
+      setSalesError("");
+      const { data, error } = await supabase
+        .from("pos_transactions")
+        .select("id, appointment_id, service_name_snapshot, customer_name_snapshot, amount_pesos, payment_method, payment_status, created_at, customer:profiles!pos_transactions_customer_id_fkey(full_name)")
+        .order("created_at", { ascending: false });
+      if (cancelled) return;
+      if (error) {
+        setSalesError(error.message);
+        setSalesLoading(false);
+        return;
+      }
+      setSales((data || []).map(row => ({
+        id: `TRX-${String(row.id).slice(0, 8).toUpperCase()}`,
+        databaseId: row.id,
+        appointmentId: row.appointment_id,
+        time: new Date(row.created_at).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Manila" }),
+        customer: row.customer_name_snapshot || row.customer?.full_name || "Walk-in Customer",
+        service: row.service_name_snapshot,
+        barber: "—",
+        amount: Number(row.amount_pesos),
+        payment: ({ cash: "Cash", gcash: "GCash", card: "Card", other: "Other", maya: "Maya", qrph: "QRPH", bank_transfer: "Bank Transfer" })[row.payment_method] || row.payment_method,
+        status: row.payment_status === "paid" ? "Completed" : row.payment_status,
+      })));
+      setSalesLoading(false);
+    }
+    loadSales(true);
+    const channel = supabase.channel("admin-pos-transactions")
+      .on("postgres_changes", { event: "*", schema: "public", table: "pos_transactions" }, () => {
+        window.clearTimeout(refreshTimer);
+        refreshTimer = window.setTimeout(() => loadSales(false), 180);
+      }).subscribe();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(refreshTimer);
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) return;
     let cancelled = false;
@@ -376,15 +424,48 @@ export default function App({ profile, onSignOut }){
       notify(`Could not register walk-in: ${error?.message || "Unknown error"}`);
     }
   };
-  const checkout = (form)=>{
-    if(!form.items.length){notify("Add at least one service before checkout.");return;}
-    const amount=form.items.reduce((sum,s)=>sum+s.price,0);
-    const sale={id:`TRX-${String(Date.now()).slice(-6)}`,time:new Date().toLocaleTimeString("en-PH",{hour:"2-digit",minute:"2-digit"}),customer:form.customer||"Walk-in Customer",service:form.items.map(x=>x.name).join(", "),barber:form.barber,amount,payment:form.payment,status:"Completed"};
-    setSales(s=>[sale,...s]);
-    setAppointments(a=>a.map(x=>x.customer===form.customer&&x.status!=="Completed"?{...x,status:"Completed"}:x));
-    setModal(null);notify(`Sale recorded: ${money(amount)}.`);
-  };
-  const currentPage = page;
+  const checkout = async (form)=>{
+    if (!supabase) { notify("Supabase is not configured."); return false; }
+    if (!form.items?.length) { notify("Add at least one service before checkout."); return false; }
+    const amount = form.items.reduce((sum, item) => sum + Number(item.price || 0), 0);
+    if (!Number.isFinite(amount) || amount < 0) { notify("The transaction amount is invalid."); return false; }
+    const methodValues = { Cash: "cash", GCash: "gcash", Card: "card", Other: "other" };
+    const paymentMethod = methodValues[form.payment];
+    if (!paymentMethod) { notify("Choose a valid payment method."); return false; }
+    const serviceNames = form.items.map(item => item.name).filter(Boolean).join(", ");
+    try {
+      const { data, error } = await supabase.rpc("admin_record_pos_transaction", {
+        p_appointment_id: form.appointmentId || null,
+        p_service_name_snapshot: serviceNames,
+        p_customer_name_snapshot: form.customerName || "Walk-in Customer",
+        p_amount_pesos: amount,
+        p_payment_method: paymentMethod,
+      });
+      if (error) throw error;
+      if (!data) throw new Error("The database did not return a transaction ID.");
+      const sale = {
+        id: `TRX-${String(data).slice(0, 8).toUpperCase()}`,
+        databaseId: data,
+        appointmentId: form.appointmentId || null,
+        time: new Date().toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Manila" }),
+        customer: form.customerName || "Walk-in Customer",
+        service: serviceNames,
+        barber: "—",
+        amount,
+        payment: form.payment,
+        status: "Completed",
+      };
+      setSales(current => [sale, ...current.filter(item => item.databaseId !== sale.databaseId)]);
+      if (form.appointmentId) {
+        setAppointments(current => current.map(item => item.id === form.appointmentId ? { ...item, status: "Completed", paymentStatus: "paid" } : item));
+      }
+      notify(`Payment recorded: ${money(amount)}.`);
+      return true;
+    } catch (error) {
+      notify(`Could not complete payment: ${error?.message || "Unknown error"}`);
+      return false;
+    }
+  };  const currentPage = page;
   const commonProps = {
   appointments, setAppointments,
   customers, setCustomers,
@@ -393,7 +474,7 @@ export default function App({ profile, onSignOut }){
   appointmentsLoading, appointmentsError,
   servicesLoading, servicesError, saveService,
   barbersLoading, barbersError, saveBarber, updateBarberStatus,
-  sales, setSales,
+  sales, setSales, salesLoading, salesError,
   search, setSearch,
   notify, setModal,
   updateStatus, navigate, addWalkIn, checkout
@@ -441,7 +522,7 @@ function Dashboard(p){
       <Metric label="Today's Appointments" value={today.length} change="+12% vs. last week" icon={CalendarCheck}/>
       <Metric label="Waiting Customers" value={waiting.length} icon={Clock3} tone="blue"/>
       <Metric label="Currently In Service" value={inService.length} icon={Scissors} tone="purple"/>
-      <Metric label="Today's Sales (demo)" value={money(revenue)} change="From recorded demo transactions" icon={CircleDollarSign} tone="green"/>
+      <Metric label="Today's Sales" value={money(revenue)} change="Recorded transactions" icon={CircleDollarSign} tone="green"/>
     </div>
     <div className="dashboard-grid">
       <section className="panel span-two"><div className="panel-head"><div><h3>Live Queue Overview</h3><p>Customers waiting to be served</p></div><button className="text-link" onClick={()=>p.navigate("Live Queue")}>View live queue <ArrowUpRight size={14}/></button></div>
@@ -576,20 +657,50 @@ function Services(p){
 }
 
 function POS(p){
-  const [customer,setCustomer]=useState("");
-  const [barber,setBarber]=useState(p.barbers[0]?.name||"");
+  const [appointmentId,setAppointmentId]=useState("");
   const [payment,setPayment]=useState("Cash");
   const [selected,setSelected]=useState([]);
-  const add=(s)=>setSelected(xs=>[...xs,{...s,lineId:Date.now()+Math.random()}]);
-  const total=selected.reduce((n,s)=>n+s.price,0);
-  return <><PageTitle title="Point of Sale (POS)" subtitle="Create a sale for completed services and record the customer's payment."/><div className="pos-layout"><section className="panel"><div className="panel-head"><div><h3>Available Services</h3><p>Select one or more services to add to the transaction.</p></div></div><div className="pos-service-list">{p.services.filter(s=>s.active).map(s=><div className="pos-service" key={s.id}><div className="service-symbol"><Scissors size={17}/></div><div className="pos-service-info"><strong>{s.name}</strong><span>{s.duration} minutes · {s.category}</span><b>{money(s.price)}</b></div><Button kind="secondary" onClick={()=>add(s)}>Add to sale</Button></div>)}</div></section><section className="panel pos-cart"><div className="panel-head"><div><h3>Current Transaction</h3><p>Sale summary</p></div><span className="live-pill">DRAFT</span></div><label>Customer<select value={customer} onChange={e=>setCustomer(e.target.value)}><option value="">Walk-in Customer</option>{p.customers.map(c=><option key={c.id}>{c.name}</option>)}</select></label><label>Barber<select value={barber} onChange={e=>setBarber(e.target.value)}>{p.barbers.map(b=><option key={b.id}>{b.name}</option>)}</select></label><div className="cart-lines">{selected.length?selected.map(s=><div className="cart-line" key={s.lineId}><div><strong>{s.name}</strong><small>{money(s.price)}</small></div><button onClick={()=>setSelected(xs=>xs.filter(x=>x.lineId!==s.lineId))} aria-label="Remove item"><X size={15}/></button></div>):<EmptyState title="No items added" text="Choose a service to start a sale."/>}</div><label>Payment method<select value={payment} onChange={e=>setPayment(e.target.value)}><option>Cash</option><option>GCash</option><option>Card</option><option>Other</option></select></label><div className="total-line"><span>Total amount</span><strong>{money(total)}</strong></div><Button block icon={Check} disabled={!selected.length} onClick={()=>{p.checkout({customer,barber,payment,items:selected});setSelected([]);setCustomer("")}}>Complete Payment</Button><p className="small-note"><ShieldCheck size={13}/> Demo only: no real payment is processed.</p></section></div></>;
+  const [saving,setSaving]=useState(false);
+  const eligibleAppointments=p.appointments.filter(a=>a.date===todayISO()&&["In Service","Completed"].includes(a.status)&&a.paymentStatus!=="paid");
+  const linkedAppointment=eligibleAppointments.find(a=>a.id===appointmentId);
+  const add=(service)=>setSelected(items=>[...items,{...service,lineId:`${Date.now()}-${Math.random()}`}]);
+  const total=selected.reduce((sum,item)=>sum+Number(item.price||0),0);
+  const complete=async()=>{
+    setSaving(true);
+    const ok=await p.checkout({appointmentId:appointmentId||null,customerName:linkedAppointment?.customer||"Walk-in Customer",payment,items:selected});
+    setSaving(false);
+    if(ok){setSelected([]);setAppointmentId("");}
+  };
+  return <>
+    <PageTitle title="Point of Sale (POS)" subtitle="Record a completed service and its payment in Supabase."/>
+    {p.servicesLoading&&<div className="notice">Loading services…</div>}
+    {p.servicesError&&<div className="notice notice-error">Could not load services: {p.servicesError}</div>}
+    {p.salesError&&<div className="notice notice-error">Could not load transactions: {p.salesError}</div>}
+    <div className="pos-layout">
+      <section className="panel">
+        <div className="panel-head"><div><h3>Available Services</h3><p>Select one or more services to add to the transaction.</p></div></div>
+        <div className="pos-service-list">{p.services.filter(service=>service.active).map(service=><div className="pos-service" key={service.id}><div className="service-symbol"><Scissors size={17}/></div><div className="pos-service-info"><strong>{service.name}</strong><span>{service.duration} minutes · {service.category}</span><b>{money(service.price)}</b></div><Button kind="secondary" onClick={()=>add(service)}>Add to sale</Button></div>)}</div>
+        {!p.servicesLoading&&!p.servicesError&&!p.services.some(service=>service.active)&&<EmptyState title="No active services" text="Add or activate a service in Services & Pricing first."/>}
+      </section>
+      <section className="panel pos-cart">
+        <div className="panel-head"><div><h3>Current Transaction</h3><p>Sale summary</p></div><span className="live-pill">DRAFT</span></div>
+        <label>Link to today's appointment (optional)<select value={appointmentId} onChange={event=>setAppointmentId(event.target.value)}><option value="">Walk-in / no linked appointment</option>{eligibleAppointments.map(item=><option key={item.id} value={item.id}>{item.queue} · {item.customer} · {item.service} ({item.status})</option>)}</select></label>
+        {linkedAppointment&&<div className="notice">Customer: <strong>{linkedAppointment.customer}</strong> · Queue {linkedAppointment.queue}</div>}
+        <div className="cart-lines">{selected.length?selected.map(item=><div className="cart-line" key={item.lineId}><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><button onClick={()=>setSelected(items=>items.filter(line=>line.lineId!==item.lineId))} aria-label="Remove item"><X size={15}/></button></div>):<EmptyState title="No items added" text="Choose a service to start a sale."/>}</div>
+        <label>Payment method<select value={payment} onChange={event=>setPayment(event.target.value)}><option>Cash</option><option>GCash</option><option>Card</option><option>Other</option></select></label>
+        <div className="total-line"><span>Total amount</span><strong>{money(total)}</strong></div>
+        <Button block icon={Check} disabled={!selected.length||saving||p.servicesLoading||!p.services.length} onClick={complete}>{saving?"Recording payment…":"Complete Payment"}</Button>
+        <p className="small-note"><ShieldCheck size={13}/> This records the payment in the shop database; it does not charge a card or verify an external GCash transfer.</p>
+      </section>
+    </div>
+  </>;
 }
 
 function Sales(p){
   const total=p.sales.reduce((n,s)=>n+s.amount,0);
   const [paymentFilter,setPaymentFilter]=useState("All");
   const rows=p.sales.filter(s=>(paymentFilter==="All"||s.payment===paymentFilter)&&`${s.id} ${s.customer} ${s.service}`.toLowerCase().includes(p.search.toLowerCase()));
-  return <><PageTitle title="Sales & Cash Drawer" subtitle="Review recorded sales and payment methods. No live payment terminal is connected." action={<Button icon={Download} kind="secondary" onClick={()=>downloadCSV(p.sales,"royal-barber-sales.csv")}>Export CSV</Button>}/><div className="metrics-grid"><Metric label="Recorded Sales" value={p.sales.length} icon={ReceiptText}/><Metric label="Recorded Revenue" value={money(total)} icon={CircleDollarSign} tone="green"/><Metric label="Cash Payments" value={money(p.sales.filter(s=>s.payment==="Cash").reduce((n,s)=>n+s.amount,0))} icon={Banknote} tone="blue"/><Metric label="GCash Payments" value={money(p.sales.filter(s=>s.payment==="GCash").reduce((n,s)=>n+s.amount,0))} icon={CreditCard} tone="purple"/></div><section className="panel"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search transaction or customer"/></div><select value={paymentFilter} onChange={e=>setPaymentFilter(e.target.value)}><option>All</option><option>Cash</option><option>GCash</option><option>Card</option><option>Other</option></select></div><div className="table-wrap"><table><thead><tr><th>TRANSACTION ID</th><th>TIME</th><th>CUSTOMER</th><th>SERVICE</th><th>PAYMENT</th><th>AMOUNT</th><th>STATUS</th></tr></thead><tbody>{rows.map(s=><tr key={s.id}><td className="mono">{s.id}</td><td>{s.time}</td><td>{s.customer}</td><td>{s.service}</td><td><span className="payment-tag">{s.payment}</span></td><td><strong>{money(s.amount)}</strong></td><td><Status value={s.status}/></td></tr>)}</tbody></table></div></section></>;
+  return <><PageTitle title="Sales & Cash Drawer" subtitle="Review payments recorded by the admin POS." action={<Button icon={Download} kind="secondary" onClick={()=>downloadCSV(p.sales,"royal-barber-sales.csv")}>Export CSV</Button>}/><div className="metrics-grid"><Metric label="Recorded Sales" value={p.sales.length} icon={ReceiptText}/><Metric label="Recorded Revenue" value={money(total)} icon={CircleDollarSign} tone="green"/><Metric label="Cash Payments" value={money(p.sales.filter(s=>s.payment==="Cash").reduce((n,s)=>n+s.amount,0))} icon={Banknote} tone="blue"/><Metric label="GCash Payments" value={money(p.sales.filter(s=>s.payment==="GCash").reduce((n,s)=>n+s.amount,0))} icon={CreditCard} tone="purple"/></div><section className="panel"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search transaction or customer"/></div><select value={paymentFilter} onChange={e=>setPaymentFilter(e.target.value)}><option>All</option><option>Cash</option><option>GCash</option><option>Card</option><option>Other</option></select></div>{p.salesLoading&&<div className="notice">Loading transactions…</div>}{p.salesError&&<div className="notice notice-error">{p.salesError}</div>}<div className="table-wrap"><table><thead><tr><th>TRANSACTION ID</th><th>TIME</th><th>CUSTOMER</th><th>SERVICE</th><th>PAYMENT</th><th>AMOUNT</th><th>STATUS</th></tr></thead><tbody>{rows.map(s=><tr key={s.id}><td className="mono">{s.id}</td><td>{s.time}</td><td>{s.customer}</td><td>{s.service}</td><td><span className="payment-tag">{s.payment}</span></td><td><strong>{money(s.amount)}</strong></td><td><Status value={s.status}/></td></tr>)}</tbody></table></div></section></>;
 }
 function downloadCSV(rows,filename){
  const cols=["id","time","customer","service","barber","amount","payment","status"];
@@ -600,7 +711,7 @@ function Reports(p){
   const total=p.sales.reduce((n,s)=>n+s.amount,0);
   const max=Math.max(1,...p.sales.map(s=>s.amount));
   const serviceCounts=p.sales.reduce((acc,s)=>{acc[s.service]=(acc[s.service]||0)+1;return acc;},{});
-  return <><PageTitle title="Reports & Analytics" subtitle="Review recorded transactions and operational activity in this demo." action={<Button icon={Download} kind="secondary" onClick={()=>downloadCSV(p.sales,"royal-barber-report.csv")}>Export Report</Button>}/><div className="metrics-grid"><Metric label="Gross Recorded Sales" value={money(total)} icon={CircleDollarSign} tone="green"/><Metric label="Transactions" value={p.sales.length} icon={ReceiptText}/><Metric label="Appointments" value={p.appointments.length} icon={CalendarDays} tone="blue"/><Metric label="Registered Customers" value={p.customers.length} icon={Users} tone="purple"/></div><div className="reports-grid"><section className="panel"><div className="panel-head"><div><h3>Sales by Transaction</h3><p>Illustrative view of recorded demo sales</p></div></div><div className="bar-chart">{p.sales.slice(0,8).reverse().map((s,i)=><div className="chart-col" key={s.id}><div className="chart-value">{Math.round(s.amount)}</div><div className="chart-bar" style={{height:`${Math.max(8,s.amount/max*100)}%`}}></div><span>{s.id.slice(-3)}</span></div>)}</div><div className="chart-legend"><span></span>Recorded sales (PHP)</div></section><section className="panel"><h3>Service Breakdown</h3><p className="muted-text">Count by service description</p><div className="breakdown-list">{Object.entries(serviceCounts).map(([name,count])=><div className="breakdown-row" key={name}><div><span>{name}</span><strong>{count}</strong></div><div className="progress-track"><span style={{width:`${count/Math.max(1,...Object.values(serviceCounts))*100}%`}}></span></div></div>)}</div></section><section className="panel span-two"><div className="panel-head"><div><h3>Operational Summary</h3><p>Current record counts</p></div></div><div className="summary-cards"><div><span>Waiting</span><strong>{p.appointments.filter(a=>a.status==="Waiting").length}</strong></div><div><span>In service</span><strong>{p.appointments.filter(a=>a.status==="In Service").length}</strong></div><div><span>Completed appointments</span><strong>{p.appointments.filter(a=>a.status==="Completed").length}</strong></div><div><span>Active barbers</span><strong>{p.barbers.length}</strong></div></div><p className="small-note"><CircleAlert size={14}/> These are prototype reports based on browser-stored demo data, not verified accounting records.</p></section></div></>;
+  return <><PageTitle title="Reports & Analytics" subtitle="Review recorded transactions and operational activity." action={<Button icon={Download} kind="secondary" onClick={()=>downloadCSV(p.sales,"royal-barber-report.csv")}>Export Report</Button>}/><div className="metrics-grid"><Metric label="Gross Recorded Sales" value={money(total)} icon={CircleDollarSign} tone="green"/><Metric label="Transactions" value={p.sales.length} icon={ReceiptText}/><Metric label="Appointments" value={p.appointments.length} icon={CalendarDays} tone="blue"/><Metric label="Registered Customers" value={p.customers.length} icon={Users} tone="purple"/></div><div className="reports-grid"><section className="panel"><div className="panel-head"><div><h3>Sales by Transaction</h3><p>Recorded POS transactions</p></div></div><div className="bar-chart">{p.sales.slice(0,8).reverse().map((s,i)=><div className="chart-col" key={s.id}><div className="chart-value">{Math.round(s.amount)}</div><div className="chart-bar" style={{height:`${Math.max(8,s.amount/max*100)}%`}}></div><span>{s.id.slice(-3)}</span></div>)}</div><div className="chart-legend"><span></span>Recorded sales (PHP)</div></section><section className="panel"><h3>Service Breakdown</h3><p className="muted-text">Count by service description</p><div className="breakdown-list">{Object.entries(serviceCounts).map(([name,count])=><div className="breakdown-row" key={name}><div><span>{name}</span><strong>{count}</strong></div><div className="progress-track"><span style={{width:`${count/Math.max(1,...Object.values(serviceCounts))*100}%`}}></span></div></div>)}</div></section><section className="panel span-two"><div className="panel-head"><div><h3>Operational Summary</h3><p>Current record counts</p></div></div><div className="summary-cards"><div><span>Waiting</span><strong>{p.appointments.filter(a=>a.status==="Waiting").length}</strong></div><div><span>In service</span><strong>{p.appointments.filter(a=>a.status==="In Service").length}</strong></div><div><span>Completed appointments</span><strong>{p.appointments.filter(a=>a.status==="Completed").length}</strong></div><div><span>Active barbers</span><strong>{p.barbers.length}</strong></div></div><p className="small-note"><CircleAlert size={14}/> Reports reflect transactions recorded in Supabase. Cash drawer reconciliation is a separate phase.</p></section></div></>;
 }
 
 function SettingsPage({profileName,setProfileName,notify}){
