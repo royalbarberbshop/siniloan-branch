@@ -107,7 +107,8 @@ export default function App({ profile, onSignOut }){
           customer:profiles!appointments_customer_id_fkey(full_name, phone),
           walk_in_customer:walk_in_customers!appointments_walk_in_customer_id_fkey(full_name, phone),
           service:services!appointments_service_id_fkey(name, price_pesos),
-          barber:barbers!appointments_barber_id_fkey(display_name)`)
+          barber:barbers!appointments_barber_id_fkey(display_name),
+          preferred_barber:barbers!appointments_preferred_barber_id_fkey(display_name)`)
         .order("queue_date", { ascending: false })
         .order("queue_number", { ascending: true });
       if (cancelled) return;
@@ -130,7 +131,7 @@ export default function App({ profile, onSignOut }){
           customer: row.customer?.full_name || row.walk_in_customer?.full_name || "Customer",
           phone: row.customer?.phone || row.walk_in_customer?.phone || "",
           service: row.service?.name || "Service unavailable",
-          barber: row.barber?.display_name || "Unassigned",
+          barber: row.barber?.display_name || row.preferred_barber?.display_name || "Unassigned",
           date: row.queue_date,
           time: starts.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Manila" }),
           status: statusLabels[row.status] || row.status,
