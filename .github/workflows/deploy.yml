@@ -34,6 +34,8 @@ jobs:
           VITE_DEMO_SUPABASE_URL: ${{ vars.VITE_DEMO_SUPABASE_URL }}
           VITE_DEMO_SUPABASE_ANON_KEY: ${{ vars.VITE_DEMO_SUPABASE_ANON_KEY }}
         run: npm run build
+      - name: Add SPA fallback for customer and admin routes
+        run: cp dist/index.html dist/404.html
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload built site
