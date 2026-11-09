@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { supabase, isSupabaseConfigured } from "./lib/supabase.js";
+import { supabase, isSupabaseConfigured, activeMode } from "./lib/supabase.js";
 import App from "./App.jsx";
 
 const styles = {
@@ -135,7 +135,7 @@ export default function AuthGate() {
       alive = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [activeMode]);
 
   useEffect(() => {
     if (!supabase || !session?.user?.id) {
@@ -229,7 +229,7 @@ export default function AuthGate() {
     return (
       <MessagePage
         title="Setup required"
-        message="Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your local .env.local file, then restart the development server."
+        message="The selected Supabase environment is not configured. Check the matching LIVE or DEMO project URL and anon key in the deployment settings."
       />
     );
   }
@@ -249,9 +249,7 @@ export default function AuthGate() {
         <section style={styles.card}>
           <div style={styles.logo}>R</div>
           <h1 style={styles.heading}>Royal Barber Shop</h1>
-          <p style={styles.description}>
-            Administrator sign-in. Use an existing authorized account.
-          </p>
+          <p style={styles.description}>Administrator sign-in · <b>{activeMode === "demo" ? "DEMO environment" : "LIVE environment"}</b>. Use the account created in this selected Supabase project.</p>
 
           <form onSubmit={handleLogin}>
             <label style={styles.label} htmlFor="admin-email">
