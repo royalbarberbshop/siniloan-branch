@@ -78,7 +78,9 @@ export default function App({ profile, onSignOut }){
   const [appointments,setAppointments] = useState([]);
   const [appointmentsLoading, setAppointmentsLoading] = useState(false);
   const [appointmentsError, setAppointmentsError] = useState("");
-  const [customers,setCustomers] = useState(()=>readStorage("royal-customers",initialCustomers));
+  const [customers,setCustomers] = useState([]);
+  const [customersLoading,setCustomersLoading] = useState(false);
+  const [customersError,setCustomersError] = useState("");
   const [barbers,setBarbers] = useState([]);
   const [barbersLoading, setBarbersLoading] = useState(false);
   const [barbersError, setBarbersError] = useState("");
@@ -163,7 +165,69 @@ export default function App({ profile, onSignOut }){
     };
   }, []);
 
-  useEffect(()=>localStorage.setItem("royal-customers",JSON.stringify(customers)),[customers]);
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setCustomersError("Supabase is not configured.");
+      return;
+    }
+    let cancelled = false;
+    let refreshTimer;
+    async function loadCustomers(showLoading = false) {
+      if (showLoading) setCustomersLoading(true);
+      setCustomersError("");
+      const [profilesResult, walkInsResult, appointmentsResult] = await Promise.all([
+        supabase.from("profiles").select("id, full_name, phone, created_at").eq("role", "customer"),
+        supabase.from("walk_in_customers").select("id, full_name, phone, created_at"),
+        supabase.from("appointments").select("customer_id, walk_in_customer_id, queue_date, status")
+      ]);
+      if (cancelled) return;
+      const failure = profilesResult.error || walkInsResult.error || appointmentsResult.error;
+      if (failure) {
+        setCustomersError(failure.message);
+        setCustomersLoading(false);
+        return;
+      }
+      const byId = new Map();
+      const byPhone = new Map();
+      const normalizePhone = value => String(value || "").replace(/\s+/g, "");
+      const add = (row, source) => {
+        const phone = normalizePhone(row.phone);
+        const key = phone || `${source}:${row.id}`;
+        const existing = byPhone.get(key);
+        const item = existing || { id: row.id, name: row.full_name || "Customer", phone: row.phone || "—", visits: 0, lastVisit: "—", status: "Active", source };
+        if (!existing || (source === "walk-in" && item.source !== "profile")) {
+          item.id = row.id;
+          item.name = row.full_name || item.name;
+          item.phone = row.phone || item.phone;
+          item.source = source;
+        }
+        byPhone.set(key, item);
+        byId.set(`${source}:${row.id}`, item);
+      };
+      (profilesResult.data || []).forEach(row => add(row, "profile"));
+      (walkInsResult.data || []).forEach(row => add(row, "walk-in"));
+      (appointmentsResult.data || []).forEach(row => {
+        const item = row.customer_id ? byId.get(`profile:${row.customer_id}`) : byId.get(`walk-in:${row.walk_in_customer_id}`);
+        if (!item || ["cancelled", "no_show"].includes(row.status)) return;
+        item.visits += 1;
+        if (row.queue_date && (item.lastVisit === "—" || row.queue_date > item.lastVisit)) item.lastVisit = row.queue_date;
+      });
+      const formatted = [...byPhone.values()].map(item => ({
+        ...item,
+        lastVisit: item.lastVisit === "—" ? "—" : new Date(`${item.lastVisit}T12:00:00+08:00`).toLocaleDateString("en-PH", { month: "short", day: "2-digit", year: "numeric", timeZone: "Asia/Manila" })
+      })).sort((a,b) => a.name.localeCompare(b.name));
+      setCustomers(formatted);
+      setCustomersLoading(false);
+    }
+    loadCustomers(true);
+    const channel = supabase.channel("admin-customer-directory")
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => { window.clearTimeout(refreshTimer); refreshTimer = window.setTimeout(() => loadCustomers(false), 200); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "walk_in_customers" }, () => { window.clearTimeout(refreshTimer); refreshTimer = window.setTimeout(() => loadCustomers(false), 200); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "appointments" }, () => { window.clearTimeout(refreshTimer); refreshTimer = window.setTimeout(() => loadCustomers(false), 200); })
+      .subscribe();
+    return () => { cancelled = true; window.clearTimeout(refreshTimer); supabase.removeChannel(channel); };
+  }, []);
+
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
       setSalesError("Supabase is not configured.");
@@ -425,6 +489,26 @@ export default function App({ profile, onSignOut }){
       notify(`Could not register walk-in: ${error?.message || "Unknown error"}`);
     }
   };
+  const addCustomer = async (form) => {
+    if (!supabase) { notify("Supabase is not configured."); return; }
+    if (!form.name?.trim() || !form.phone?.trim()) { notify("Enter the customer's name and phone number."); return; }
+    try {
+      const { data, error } = await supabase.rpc("admin_create_customer_directory_entry", {
+        p_customer_name: form.name.trim(), p_customer_phone: form.phone.trim()
+      });
+      if (error) throw error;
+      const created = Array.isArray(data) ? data[0] : data;
+      if (!created?.id) throw new Error("The database did not return the customer record.");
+      setCustomers(current => {
+        const normalized = String(created.phone || "").replace(/\s+/g, "");
+        const withoutDuplicate = current.filter(item => String(item.phone || "").replace(/\s+/g, "") !== normalized);
+        return [...withoutDuplicate, { id: created.id, name: created.full_name, phone: created.phone, visits: 0, lastVisit: "—", status: "Active", source: "walk-in" }].sort((a,b) => a.name.localeCompare(b.name));
+      });
+      setModal(null);
+      notify("Customer saved to Supabase.");
+    } catch (error) { notify(`Could not save customer: ${error?.message || "Unknown error"}`); }
+  };
+
   const checkout = async (form)=>{
     if (!supabase) { notify("Supabase is not configured."); return false; }
     if (!form.items?.length) { notify("Add at least one service before checkout."); return false; }
@@ -469,7 +553,7 @@ export default function App({ profile, onSignOut }){
   };  const currentPage = page;
   const commonProps = {
   appointments, setAppointments,
-  customers, setCustomers,
+  customers, setCustomers, customersLoading, customersError, addCustomer,
   barbers, setBarbers,
   services, setServices,
   appointmentsLoading, appointmentsError,
@@ -505,7 +589,7 @@ export default function App({ profile, onSignOut }){
       </div>
       <footer className="footer"><span>© 2026 Royal Barber Shop</span><span>Admin workspace <b>•</b> Supabase connected</span></footer>
     </main>
-    {modal && <Modal modal={modal} setModal={setModal} services={services} barbers={barbers} setBarbers={setBarbers} customers={customers} setCustomers={setCustomers} addWalkIn={addWalkIn} checkout={checkout} notify={notify}/>}
+    {modal && <Modal modal={modal} setModal={setModal} services={services} barbers={barbers} setBarbers={setBarbers} customers={customers} setCustomers={setCustomers} addWalkIn={addWalkIn} checkout={checkout} addCustomer={addCustomer} notify={notify}/>}
     {toast && <div className="toast"><CircleCheck size={17}/>{toast}</div>}
   </div>;
 }
@@ -566,7 +650,7 @@ function WalkIn(p){
 
 function Customers(p){
   const rows=p.customers.filter(c=>`${c.name} ${c.phone} ${c.id}`.toLowerCase().includes(p.search.toLowerCase()));
-  return <><PageTitle title="Customer Directory" subtitle="Search customer profiles and review visit history." action={<Button icon={Plus} onClick={()=>p.setModal({type:"customer"})}>Add Customer</Button>}/><div className="metrics-grid compact-metrics"><Metric label="Total Customers" value={p.customers.length} icon={Users}/><Metric label="Active Profiles" value={p.customers.filter(c=>c.status==="Active").length} icon={ShieldCheck} tone="green"/><Metric label="Repeat Customers" value={p.customers.filter(c=>c.visits>=5).length} icon={TrendingUp} tone="blue"/><Metric label="Customer Records" value="Demo" icon={ReceiptText} tone="purple"/></div><section className="panel"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search name, phone, or customer ID"/></div><span className="muted-text">{rows.length} customers</span></div><div className="table-wrap"><table><thead><tr><th>CUSTOMER ID</th><th>CUSTOMER</th><th>PHONE NUMBER</th><th>TOTAL VISITS</th><th>LAST VISIT</th><th>STATUS</th></tr></thead><tbody>{rows.map(c=><tr key={c.id}><td className="mono">{c.id}</td><td><strong>{c.name}</strong></td><td>{c.phone}</td><td>{c.visits}</td><td>{c.lastVisit}</td><td><Status value={c.status}/></td></tr>)}</tbody></table></div></section></>;
+  return <><PageTitle title="Customer Directory" subtitle="Customer profiles and visit history synced from Supabase." action={<Button icon={Plus} onClick={()=>p.setModal({type:"customer"})}>Add Customer</Button>}/>{p.customersError&&<div className="notice notice-error">Unable to load customers: {p.customersError}</div>}{p.customersLoading&&<div className="notice">Loading customer records from Supabase…</div>}<div className="metrics-grid compact-metrics"><Metric label="Total Customers" value={p.customers.length} icon={Users}/><Metric label="Active Profiles" value={p.customers.length} icon={ShieldCheck} tone="green"/><Metric label="Repeat Customers" value={p.customers.filter(c=>c.visits>=5).length} icon={TrendingUp} tone="blue"/><Metric label="Customer Records" value="Supabase" icon={ReceiptText} tone="purple"/></div><section className="panel"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search name, phone, or customer ID"/></div><span className="muted-text">{rows.length} customers</span></div><div className="table-wrap"><table><thead><tr><th>CUSTOMER ID</th><th>CUSTOMER</th><th>PHONE NUMBER</th><th>TOTAL VISITS</th><th>LAST VISIT</th><th>STATUS</th></tr></thead><tbody>{rows.map(c=><tr key={`${c.source}:${c.id}`}><td className="mono">{`CUS-${String(c.id).slice(0,8).toUpperCase()}`}</td><td><strong>{c.name}</strong></td><td>{c.phone}</td><td>{c.visits}</td><td>{c.lastVisit}</td><td><Status value={c.status}/></td></tr>)}</tbody></table>{!rows.length&&!p.customersLoading&&<EmptyState title="No customers found" text="Customers will appear here after registration or booking."/>}</div></section></>;
 }
 
 function Barbers(p){
@@ -845,11 +929,11 @@ function SettingsPage({profileName,setProfileName,notify,activeMode,isDemoEnviro
     <section className="panel settings-panel"><div className="panel-head"><div><h3>Business Profile</h3><p>Details displayed in booking confirmations and receipts.</p></div></div><form onSubmit={e=>{e.preventDefault();setSaved(true);notify("Settings saved in this browser demo.")}}><div className="settings-form"><label>Business name<input value={shop.name} onChange={e=>setShop(s=>({...s,name:e.target.value}))}/></label><label>Contact number<input value={shop.phone} onChange={e=>setShop(s=>({...s,phone:e.target.value}))}/></label><label className="full">Business address<input value={shop.address} onChange={e=>setShop(s=>({...s,address:e.target.value}))}/></label><label>Opening time<input type="time" value={shop.open} onChange={e=>setShop(s=>({...s,open:e.target.value}))}/></label><label>Closing time<input type="time" value={shop.close} onChange={e=>setShop(s=>({...s,close:e.target.value}))}/></label><label>Queue number prefix<input value={shop.queuePrefix} maxLength={4} onChange={e=>setShop(s=>({...s,queuePrefix:e.target.value}))}/></label><label>Default appointment slot (minutes)<select value={shop.slot} onChange={e=>setShop(s=>({...s,slot:Number(e.target.value)}))}><option value={15}>15 minutes</option><option value={30}>30 minutes</option><option value={45}>45 minutes</option><option value={60}>60 minutes</option></select></label></div><h3 className="settings-subhead">Operating Days</h3><div className="days-list">{["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(d=><label key={d} className="day-toggle"><span>{d}</span><input type="checkbox" checked={days.includes(d)} onChange={()=>toggleDay(d)}/><i></i></label>)}</div><div className="settings-actions"><Button icon={Save}>Save Settings</Button>{saved&&<span className="saved-message"><Check size={14}/> Saved in demo</span>}</div></form></section><section className="panel settings-panel"><div className="panel-head"><div><h3>Administrator Profile</h3><p>Local display preference for the admin interface.</p></div></div><label>Display name<input value={profileName} onChange={e=>setProfileName(e.target.value)}/></label><div className="settings-callout"><ShieldCheck size={18}/><div><strong>Security status</strong><p>Admin access is checked against the selected Supabase project. Use LIVE for real shop activity and DEMO for training and demonstrations.</p></div></div><h3 className="settings-subhead">Data & Privacy</h3><p className="muted-text">Demo records are stored in this browser's local storage. They are not shared across devices and may be cleared if browser data is removed.</p><p className="muted-text">To clear or reseed demo records, use the separate DEMO Supabase project only. This screen intentionally does not offer a one-click database wipe.</p></section></div></>;
 }
 
-function Modal({modal,setModal,services,barbers,customers,addWalkIn,notify}){
+function Modal({modal,setModal,services,barbers,customers,addWalkIn,addCustomer,notify}){
   const [form,setForm]=useState({name:"",phone:"",service:services.find(s=>s.active)?.name||"",barber:"Unassigned",role:"Barber"});
   const change=(k,v)=>setForm(f=>({...f,[k]:v}));
   if(modal.type==="walkin")return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal(null)}}><div className="modal"><div className="modal-head"><div><h2>Register Walk-in</h2><p>Create a queue entry for a new arrival.</p></div><button onClick={()=>setModal(null)}><X/></button></div><form onSubmit={e=>{e.preventDefault();addWalkIn(form)}} className="modal-form"><label>Customer name *<input required value={form.name} onChange={e=>change("name",e.target.value)} placeholder="Full name"/></label><label>Phone number *<input required value={form.phone} onChange={e=>change("phone",e.target.value)} placeholder="09XX XXX XXXX"/></label><label>Service<select value={form.service} onChange={e=>change("service",e.target.value)}>{services.filter(s=>s.active).map(s=><option key={s.id} value={s.name}>{s.name}</option>)}</select></label><label>Preferred barber<select value={form.barber} onChange={e=>change("barber",e.target.value)}><option>Unassigned</option>{barbers.map(b=><option key={b.id}>{b.name}</option>)}</select></label><div className="modal-actions"><Button kind="secondary" onClick={()=>setModal(null)}>Cancel</Button><Button icon={QrCode}>Register Customer</Button></div></form></div></div>;
-  if(modal.type==="customer")return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal(null)}}><div className="modal"><div className="modal-head"><div><h2>Add Customer</h2><p>Create a customer directory entry.</p></div><button onClick={()=>setModal(null)}><X/></button></div><form className="modal-form" onSubmit={e=>{e.preventDefault();if(customers.some(c=>c.phone===form.phone)){notify("A customer with this phone number already exists.");return;}setCustomers(cs=>[{id:`CUS-${String(Date.now()).slice(-5)}`,name:form.name,phone:form.phone,visits:0,lastVisit:"—",status:"Active"},...cs]);setModal(null);notify("Customer added to this browser demo.");}}><label>Full name<input required value={form.name} onChange={e=>change("name",e.target.value)}/></label><label>Phone number<input required value={form.phone} onChange={e=>change("phone",e.target.value)}/></label><div className="modal-actions"><Button kind="secondary" onClick={()=>setModal(null)}>Cancel</Button><Button>Save Customer</Button></div></form></div></div>;
+  if(modal.type==="customer")return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal(null)}}><div className="modal"><div className="modal-head"><div><h2>Add Customer</h2><p>Save a customer record to the active Supabase project.</p></div><button onClick={()=>setModal(null)}><X/></button></div><form className="modal-form" onSubmit={e=>{e.preventDefault();addCustomer(form);}}><label>Full name<input required value={form.name} onChange={e=>change("name",e.target.value)}/></label><label>Phone number<input required value={form.phone} onChange={e=>change("phone",e.target.value)}/></label><div className="modal-actions"><Button kind="secondary" onClick={()=>setModal(null)}>Cancel</Button><Button>Save Customer</Button></div></form></div></div>;
   if(modal.type==="barber")return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal(null)}}><div className="modal"><div className="modal-head"><div><h2>Add Barber</h2><p>Add a barber profile to the roster.</p></div><button onClick={()=>setModal(null)}><X/></button></div><form className="modal-form" onSubmit={e=>{e.preventDefault();setBarbers(bs=>[...bs,{id:Math.max(0,...bs.map(b=>b.id))+1,name:form.name,role:form.role,status:"Available",schedule:"Schedule not configured",today:0}]);notify("Barber added to this browser demo.");setModal(null)}}><label>Full name<input required value={form.name} onChange={e=>change("name",e.target.value)}/></label><label>Role<select value={form.role} onChange={e=>change("role",e.target.value)}><option>Barber</option><option>Senior Barber</option><option>Master Barber</option><option>Manager</option></select></label><div className="modal-actions"><Button kind="secondary" onClick={()=>setModal(null)}>Cancel</Button><Button>Save Barber</Button></div></form></div></div>;
   return null;
 }
