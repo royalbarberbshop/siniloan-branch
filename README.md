@@ -1,24 +1,15 @@
-# Royal Barbershop – Admin Working Schedule + Customer Availability
+# Royal Barbershop — Public Today's Live Queue patch
 
-This patch adds an admin-controlled weekly schedule editor to **Barbers & Staff** and connects the customer booking calendar to the saved barber working hours.
-
-## Included
-- `src/App.jsx` – adds a **Working Schedule** action to every barber card. Admins can enable/disable each weekday and set opening/closing times. Defaults are 7:00 AM–7:00 PM.
-- `src/CustomerPage.jsx` – customer booking page with availability loaded from the `customer_get_available_slots` RPC.
-- `supabase/migrations/202611110012_customer_slot_availability.sql` – availability RPC.
-- `supabase/migrations/202611110013_admin_barber_working_schedule.sql` – grants required for authenticated admin schedule editing; existing RLS policies still enforce admin/staff write access.
+This is a customer-page-only patch based on `siniloan-branch-main(2).zip`. It adds a public queue panel to the customer page, visible whether or not a customer is signed in. It shows only today's active queue (`checked_in`, `waiting`, `in_service`) and exposes queue number, service, barber, time, and status. It does not expose customer names, phone numbers, payment references, or future appointments.
 
 ## Apply
-1. Back up your current GitHub repository branch.
-2. Replace `src/App.jsx` and `src/CustomerPage.jsx` with the files in this patch.
-3. Run both SQL migration files in Supabase SQL Editor, in numerical order (012, then 013). If migration 012 was already applied, do not rerun it unless you intend to replace that function definition.
-4. Commit and push the changed files. Wait for GitHub Actions to finish.
-5. Sign in to the admin page, open **Barbers & Staff**, choose **Working Schedule** for KAEL, enable his working days, leave rest days unchecked, and save. Hours default to 7:00 AM–7:00 PM.
-6. Open the customer booking page, select a service, choose KAEL or Any Available Barber, and test a future date/time.
+1. In your project, replace `src/CustomerPage.jsx` with the file in this patch. Keep your other files unchanged.
+2. In Supabase **SQL Editor**, open `supabase/migrations/202611110015_public_today_live_queue.sql`, paste the full contents, and click **Run** in the correct project (DEMO first, then LIVE after testing).
+3. Commit and push the changed customer page to GitHub. The existing GitHub Actions workflow should deploy it.
+4. Open the `/book` customer page in a private/incognito window without signing in. Confirm the queue is visible and changes within 15 seconds after an admin changes a queue status.
 
-## Important
-- This patch does not insert a schedule automatically. The admin must explicitly choose working days for each barber.
-- It does not change existing appointment, payment, or customer records.
-- Customer availability will remain empty for a barber/date until that barber has an enabled schedule for that weekday.
-- The availability RPC expects `services.duration_minutes`, `barbers.is_active`, `appointments.starts_at`, `appointments.ends_at`, and `appointments.status`, matching this project's schema.
-- Test in the DEMO Supabase environment first if configured. Do not apply to LIVE until you have reviewed and approved it.
+## Notes
+- The RPC uses a restricted `SECURITY DEFINER` function and returns only the fields needed for the public display. It does not grant anonymous table access to `appointments`.
+- Only active queue statuses appear. `booked`, `completed`, `cancelled`, and `no_show` are excluded.
+- This patch does not modify admin files, appointment booking logic, payments, or working-hours settings.
+- The source ZIP supplied for this patch is the basis; merge carefully if your GitHub branch has newer customer-page changes not present in that ZIP.
