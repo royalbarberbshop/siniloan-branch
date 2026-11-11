@@ -107,12 +107,12 @@ export default function App({ profile, onSignOut }){
       setAppointmentsError("");
       const { data, error } = await supabase
         .from("appointments")
-        .select(`id, starts_at, queue_date, queue_number, status, payment_status, payment_verified_at,
+        .select(`id, starts_at, queue_date, queue_number, status, payment_status,
           customer:profiles!appointments_customer_id_fkey(full_name, phone),
           walk_in_customer:walk_in_customers!appointments_walk_in_customer_id_fkey(full_name, phone),
           service:services!appointments_service_id_fkey(name, price_pesos),
           barber:barbers!appointments_barber_id_fkey(display_name),
-          preferred_barber:barbers!appointments_preferred_barber_id_fkey(display_name), payments(provider_reference,amount_pesos,status,method)`)
+          preferred_barber:barbers!appointments_preferred_barber_id_fkey(display_name)`)
         .order("queue_date", { ascending: false })
         .order("queue_number", { ascending: true });
       if (cancelled) return;
@@ -138,11 +138,9 @@ export default function App({ profile, onSignOut }){
           barber: row.barber?.display_name || row.preferred_barber?.display_name || "Unassigned",
           date: row.queue_date,
           time: starts.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Manila" }),
-          status: row.payment_status === "pending" && !row.payment_verified_at ? "Waiting for Confirmation" : (row.payment_verified_at && row.status === "booked" ? "Confirmed" : (statusLabels[row.status] || row.status)),
-          paymentReference: (row.payments || []).find(payment => payment.status === "pending")?.provider_reference || (row.payments || []).find(payment => payment.status === "paid")?.provider_reference || "",
-          onlinePaid: Number((row.payments || []).filter(payment => payment.status === "paid").reduce((sum,payment)=>sum+Number(payment.amount_pesos||0),0)),
+          status: statusLabels[row.status] || row.status,
           amount: Number(row.service?.price_pesos || 0),
-          paymentStatus: row.payment_status, paymentVerifiedAt: row.payment_verified_at,
+          paymentStatus: row.payment_status,
         };
       }));
       setAppointmentsLoading(false);
@@ -441,21 +439,13 @@ export default function App({ profile, onSignOut }){
 
   const notify = (message)=>{ setToast(message); window.setTimeout(()=>setToast(""),2800); };
   const navigate = (name)=>{setPage(name);setMobileNav(false);setSearch("");};
-  const reviewGcashPayment = async (id, approve) => {
-    if (!supabase) { notify("Supabase is not configured."); return; }
-    const { error } = await supabase.rpc("admin_review_gcash_payment", { p_appointment_id: id, p_approve: approve });
-    if (error) { notify(`Could not ${approve ? "approve" : "reject"} payment: ${error.message}`); return; }
-    notify(approve ? "Payment approved. Appointment is confirmed." : "Payment rejected. Appointment cancelled.");
-    const { data } = await supabase.from("appointments").select(`id, starts_at, queue_date, queue_number, status, payment_status, payment_verified_at, customer:profiles!appointments_customer_id_fkey(full_name,phone), service:services!appointments_service_id_fkey(name,price_pesos), barber:barbers!appointments_barber_id_fkey(display_name), payments(provider_reference,amount_pesos,status,method)`).eq("id", id).maybeSingle();
-    if (data) setAppointments(current => current.map(item => item.id === id ? { ...item, status: data.payment_status === "failed" ? "Cancelled" : "Confirmed", paymentStatus: data.payment_status, paymentVerifiedAt: data.payment_verified_at, paymentReference: data.payments?.[0]?.provider_reference || item.paymentReference } : item));
-  };
   const updateStatus = async (id, status) => {
     if (!supabase) { notify("Supabase is not configured."); return; }
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id))) {
       notify("This appointment has no valid database ID. Refresh the page and try again.");
       return;
     }
-    const statusValues = { "Booked": "booked", "Confirmed": "booked", "Checked In": "checked_in", "Waiting": "waiting", "In Service": "in_service", "Completed": "completed", "Cancelled": "cancelled", "No Show": "no_show" };
+    const statusValues = { "Booked": "booked", "Checked In": "checked_in", "Waiting": "waiting", "In Service": "in_service", "Completed": "completed", "Cancelled": "cancelled", "No Show": "no_show" };
     const nextStatus = statusValues[status];
     if (!nextStatus) { notify("Unsupported appointment status."); return; }
     const { error } = await supabase.rpc("admin_update_appointment_status", {
@@ -522,9 +512,7 @@ export default function App({ profile, onSignOut }){
   const checkout = async (form)=>{
     if (!supabase) { notify("Supabase is not configured."); return false; }
     if (!form.items?.length) { notify("Add at least one service before checkout."); return false; }
-    const grossAmount = form.items.reduce((sum, item) => sum + Number(item.price || 0), 0);
-    const linkedForBalance = form.appointmentId ? appointments.find(item => item.id === form.appointmentId) : null;
-    const amount = linkedForBalance ? Math.max(0, grossAmount - Number(linkedForBalance.onlinePaid || 0)) : grossAmount;
+    const amount = form.items.reduce((sum, item) => sum + Number(item.price || 0), 0);
     if (!Number.isFinite(amount) || amount < 0) { notify("The transaction amount is invalid."); return false; }
     const methodValues = { Cash: "cash", GCash: "gcash", Card: "card", Other: "other" };
     const paymentMethod = methodValues[form.payment];
@@ -574,7 +562,7 @@ export default function App({ profile, onSignOut }){
   sales, setSales, salesLoading, salesError,
   search, setSearch,
   notify, setModal,
-  updateStatus, reviewGcashPayment, navigate, addWalkIn, checkout
+  updateStatus, navigate, addWalkIn, checkout
 };
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav?"sidebar-open":""}`}>
@@ -632,15 +620,15 @@ function Dashboard(p){
   </>;
 }
 
-function AppointmentTable({appointments,updateStatus,reviewGcashPayment,compact=false}){
+function AppointmentTable({appointments,updateStatus,compact=false}){
   if(!appointments.length) return <EmptyState title="No appointments found" text="Appointments created through the booking workflow will appear here." />;
-  return <div className="table-wrap"><table><thead><tr><th>QUEUE / ID</th><th>CUSTOMER</th><th>SERVICE</th><th>TIME</th><th>PAYMENT REFERENCE</th><th>STATUS</th><th></th></tr></thead><tbody>{appointments.map(a=><tr key={a.id}><td><strong className="mono">{a.queue}</strong><small className="cell-sub">{a.reference || `APT-${String(a.id).slice(0, 8).toUpperCase()}`}</small></td><td><strong>{a.customer}</strong><small className="cell-sub">{a.phone}</small></td><td>{a.service}<small className="cell-sub">{a.barber}</small></td><td>{a.time}</td><td>{a.paymentReference ? <><strong className="mono">{a.paymentReference}</strong><small className="cell-sub">{money(a.onlinePaid || (a.paymentStatus === "pending" ? a.amount / 2 : a.amount))} submitted</small></> : "—"}</td><td><Status value={a.status}/></td><td><div className="row-actions">{a.status==="Waiting for Confirmation"&&reviewGcashPayment&&<><button className="mini-btn success" onClick={()=>reviewGcashPayment(a.id,true)}>Approve</button><button className="mini-btn muted" onClick={()=>reviewGcashPayment(a.id,false)}>Reject</button></>}{(a.status==="Booked"||a.status==="Confirmed")&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"Checked In")}>Check in</button>}{a.status==="Checked In"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"Waiting")}>Add to queue</button>}{a.status==="Waiting"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"In Service")}>Call</button>}{a.status==="In Service"&&<button className="mini-btn success" onClick={()=>updateStatus(a.id,"Completed")}>Complete</button>}{!["Booked","Checked In","Waiting","In Service"].includes(a.status)&&<button className="mini-btn muted" title="No available action">Details</button>}</div></td></tr>)}</tbody></table></div>;
+  return <div className="table-wrap"><table><thead><tr><th>QUEUE / ID</th><th>CUSTOMER</th><th>SERVICE</th><th>TIME</th><th>STATUS</th><th></th></tr></thead><tbody>{appointments.map(a=><tr key={a.id}><td><strong className="mono">{a.queue}</strong><small className="cell-sub">{a.reference || `APT-${String(a.id).slice(0, 8).toUpperCase()}`}</small></td><td><strong>{a.customer}</strong><small className="cell-sub">{a.phone}</small></td><td>{a.service}<small className="cell-sub">{a.barber}</small></td><td>{a.time}</td><td><Status value={a.status}/></td><td><div className="row-actions">{a.status==="Booked"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"Checked In")}>Check in</button>}{a.status==="Checked In"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"Waiting")}>Add to queue</button>}{a.status==="Waiting"&&<button className="mini-btn" onClick={()=>updateStatus(a.id,"In Service")}>Call</button>}{a.status==="In Service"&&<button className="mini-btn success" onClick={()=>updateStatus(a.id,"Completed")}>Complete</button>}{!["Booked","Checked In","Waiting","In Service"].includes(a.status)&&<button className="mini-btn muted" title="No available action">Details</button>}</div></td></tr>)}</tbody></table></div>;
 }
 
 function Appointments(p){
   const [filter,setFilter]=useState("All");
   const items=p.appointments.filter(a=>(filter==="All"||a.status===filter)&&`${a.customer} ${a.queue} ${a.service} ${a.phone}`.toLowerCase().includes(p.search.toLowerCase()));
-  return <><PageTitle title="Appointments & Queue Management" subtitle="Manage bookings, check-ins, and service progress." action={<span className="small-note">Bookings are created through the customer booking workflow.</span>}/>{p.appointmentsError&&<div className="notice notice-error">Unable to load appointments: {p.appointmentsError}</div>}{p.appointmentsLoading&&<div className="notice">Loading appointments from Supabase…</div>}<div className="metrics-grid compact-metrics"><Metric label="Total Bookings" value={p.appointments.length} icon={CalendarDays}/><Metric label="Waiting" value={p.appointments.filter(a=>a.status==="Waiting").length} icon={Clock3} tone="blue"/><Metric label="In Service" value={p.appointments.filter(a=>a.status==="In Service").length} icon={Scissors} tone="purple"/><Metric label="Completed" value={p.appointments.filter(a=>a.status==="Completed").length} icon={Check} tone="green"/></div><section className="panel"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search customer, queue number..."/></div><div className="toolbar-right"><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option>{["Waiting for Confirmation","Confirmed","Booked","Checked In","Waiting","In Service","Completed","Cancelled","No Show"].map(s=><option key={s}>{s}</option>)}</select><button className="btn btn-secondary" onClick={()=>{p.setSearch("");setFilter("All")}}><Filter size={15}/> Reset</button></div></div>{!p.appointmentsLoading&&<AppointmentTable appointments={items} updateStatus={p.updateStatus} reviewGcashPayment={p.reviewGcashPayment}/>}</section></>;
+  return <><PageTitle title="Appointments & Queue Management" subtitle="Manage bookings, check-ins, and service progress." action={<span className="small-note">Bookings are created through the customer booking workflow.</span>}/>{p.appointmentsError&&<div className="notice notice-error">Unable to load appointments: {p.appointmentsError}</div>}{p.appointmentsLoading&&<div className="notice">Loading appointments from Supabase…</div>}<div className="metrics-grid compact-metrics"><Metric label="Total Bookings" value={p.appointments.length} icon={CalendarDays}/><Metric label="Waiting" value={p.appointments.filter(a=>a.status==="Waiting").length} icon={Clock3} tone="blue"/><Metric label="In Service" value={p.appointments.filter(a=>a.status==="In Service").length} icon={Scissors} tone="purple"/><Metric label="Completed" value={p.appointments.filter(a=>a.status==="Completed").length} icon={Check} tone="green"/></div><section className="panel"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={p.search} onChange={e=>p.setSearch(e.target.value)} placeholder="Search customer, queue number..."/></div><div className="toolbar-right"><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option>{["Booked","Checked In","Waiting","In Service","Completed","Cancelled","No Show"].map(s=><option key={s}>{s}</option>)}</select><button className="btn btn-secondary" onClick={()=>{p.setSearch("");setFilter("All")}}><Filter size={15}/> Reset</button></div></div>{!p.appointmentsLoading&&<AppointmentTable appointments={items} updateStatus={p.updateStatus}/>}</section></>;
 }
 
 function Queue(p){
@@ -671,6 +659,38 @@ function Barbers(p){
   const [draft, setDraft] = useState({name:"", role:"Barber", status:"Available"});
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+  const [scheduleBarber, setScheduleBarber] = useState(null);
+  const [scheduleDraft, setScheduleDraft] = useState([]);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState("");
+  const weekDays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const openSchedule = async barber => {
+    setScheduleBarber(barber); setScheduleError(""); setScheduleLoading(true);
+    const { data, error } = await supabase.from("barber_working_hours").select("weekday,opens_at,closes_at,is_closed").eq("barber_id", barber.id);
+    if (error) { setScheduleError(error.message); setScheduleDraft([]); }
+    else {
+      const byDay = new Map((data || []).map(row => [row.weekday, row]));
+      setScheduleDraft(weekDays.map((day, weekday) => {
+        const row = byDay.get(weekday);
+        return { weekday, day, enabled: row ? !row.is_closed : false,
+          opens_at: row?.opens_at?.slice(0,5) || "07:00", closes_at: row?.closes_at?.slice(0,5) || "19:00" };
+      }));
+    }
+    setScheduleLoading(false);
+  };
+  const saveSchedule = async () => {
+    if (!scheduleBarber) return;
+    setScheduleSaving(true); setScheduleError("");
+    const rows = scheduleDraft.map(row => ({ barber_id: scheduleBarber.id, weekday: row.weekday,
+      opens_at: row.opens_at, closes_at: row.closes_at, is_closed: !row.enabled }));
+    const invalid = scheduleDraft.find(row => row.enabled && (!row.opens_at || !row.closes_at || row.closes_at <= row.opens_at));
+    if (invalid) { setScheduleError(`Check ${invalid.day}: closing time must be later than opening time.`); setScheduleSaving(false); return; }
+    const { error } = await supabase.from("barber_working_hours").upsert(rows, { onConflict: "barber_id,weekday" });
+    if (error) setScheduleError(error.message);
+    else { p.notify(`Working schedule saved for ${scheduleBarber.name}.`); setScheduleBarber(null); }
+    setScheduleSaving(false);
+  };
   const openEditor = barber => {
     setEditorOpen(true);
     setEditing(barber?.id || null);
@@ -696,9 +716,11 @@ function Barbers(p){
       <div className="barber-profile-top"><div className="barber-big-avatar">{b.name.split(" ").map(s=>s[0]).join("").slice(0,2)}</div><Status value={b.status}/></div>
       <h3>{b.name}</h3><p>{b.role}</p><div className="barber-info-line"><Clock3 size={15}/><span>{b.schedule}</span></div>
       <div className="barber-stats"><div><strong>—</strong><span>Services today</span></div><div><strong>—</strong><span>Service value today</span></div></div>
-      <div className="barber-card-actions"><Button kind="secondary" onClick={()=>openEditor(b)}>Edit Profile</Button><Button kind={b.status==="Available"?"secondary":"success"} onClick={async()=>{try{await p.updateBarberStatus(b,b.status==="Available"?"On Break":"Available");p.notify("Barber availability saved to Supabase.");}catch(error){p.notify(`Unable to update availability: ${error.message}`);}}}>{b.status==="Available"?"Set Break":"Set Available"}</Button></div>
+      <div className="barber-card-actions"><Button kind="secondary" onClick={()=>openEditor(b)}>Edit Profile</Button><Button kind="secondary" onClick={()=>openSchedule(b)}>Working Schedule</Button><Button kind={b.status==="Available"?"secondary":"success"} onClick={async()=>{try{await p.updateBarberStatus(b,b.status==="Available"?"On Break":"Available");p.notify("Barber availability saved to Supabase.");}catch(error){p.notify(`Unable to update availability: ${error.message}`);}}}>{b.status==="Available"?"Set Break":"Set Available"}</Button></div>
     </section>)}</div>
-    <section className="panel"><h3>Staff scheduling note</h3><p className="muted-text">Barber profiles are saved in Supabase. Shift schedules are managed separately through barber working hours and are not configured here yet.</p></section>
+    <section className="panel"><h3>Working schedules</h3><p className="muted-text">Admins control each barber’s working days and rest days. Default hours are 7:00 AM–7:00 PM; change them per day as needed. Customer booking availability follows these saved schedules.</p></section>
+    {scheduleBarber && <div className="modal-backdrop"><div className="modal" style={{maxWidth:650}}><div className="modal-head"><div><h2>Working Schedule · {scheduleBarber.name}</h2><p>Choose working days and set hours for each day.</p></div><button onClick={()=>setScheduleBarber(null)}><X/></button></div>{scheduleLoading ? <p>Loading schedule…</p> : <div className="modal-form">{scheduleDraft.map((row,index)=><div key={row.weekday} style={{display:"grid",gridTemplateColumns:"minmax(110px,1fr) 1fr 1fr 1fr",gap:10,alignItems:"center",padding:"8px 0",borderBottom:"1px solid #eee"}}><label style={{display:"flex",gap:8,alignItems:"center"}}><input type="checkbox" checked={row.enabled} onChange={e=>setScheduleDraft(old=>old.map((x,i)=>i===index?{...x,enabled:e.target.checked}:x))}/>{row.day}</label><label>Opens<input type="time" value={row.opens_at} disabled={!row.enabled} onChange={e=>setScheduleDraft(old=>old.map((x,i)=>i===index?{...x,opens_at:e.target.value}:x))}/></label><label>Closes<input type="time" value={row.closes_at} disabled={!row.enabled} onChange={e=>setScheduleDraft(old=>old.map((x,i)=>i===index?{...x,closes_at:e.target.value}:x))}/></label><span className="muted-text">{row.enabled?"Working":"Rest day"}</span></div>)}{scheduleError&&<div className="notice notice-error">{scheduleError}</div>}<div className="modal-actions"><Button kind="secondary" onClick={()=>setScheduleBarber(null)}>Cancel</Button><Button disabled={scheduleSaving||scheduleLoading} onClick={saveSchedule}>{scheduleSaving?"Saving…":"Save Schedule"}</Button></div></div>}</div></div>}
+
     { editorOpen && <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget){setEditorOpen(false);setEditing(null);setDraft({name:"",role:"Barber",status:"Available"});}}}><div className="modal"><div className="modal-head"><div><h2>{editing ? "Edit Barber" : "Add Barber"}</h2><p>{editing ? "Update this barber's roster profile." : "Add a barber profile to the roster."}</p></div><button onClick={()=>{setEditorOpen(false);setEditing(null);setDraft({name:"",role:"Barber",status:"Available"});}}><X/></button></div><form className="modal-form" onSubmit={save}>
       <label>Full name<input required value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))} placeholder="Enter full name"/></label>
       <label>Role<select value={draft.role} onChange={e=>setDraft(d=>({...d,role:e.target.value}))}><option>Barber</option><option>Senior Barber</option><option>Master Barber</option><option>Manager</option></select></label>
