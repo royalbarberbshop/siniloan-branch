@@ -41,3 +41,33 @@
 .rb-live-queue-page .rb-queue-stat,.rb-live-queue-page .rb-queue-sequence{box-shadow:none}
 @media(max-width:800px){.rb-header{height:auto;min-height:76px}.rb-nav-wrap{min-height:76px;gap:12px}.rb-nav{display:flex;position:static;background:transparent;padding:0;box-shadow:none;flex-direction:row;gap:14px}.rb-nav button{font-size:11px}.rb-nav-book{min-width:auto;font-size:10px;padding:10px 12px}}
 @media(max-width:600px){.rb-nav-wrap{flex-wrap:wrap;padding:12px 16px}.rb-nav{order:3;width:100%;justify-content:center}.rb-nav-book{margin-left:auto}}
+
+
+/* Responsive live queue layout and navy currently-serving treatment */
+.rb-live-queue-page{width:100%;min-width:0;padding:clamp(24px,5vw,64px) clamp(12px,3vw,24px);overflow-x:hidden}
+.rb-live-queue-panel{width:100%;max-width:1050px;min-width:0}
+.rb-queue-heading h1{font-size:clamp(22px,3vw,30px);overflow-wrap:anywhere}
+.rb-queue-stats{grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));gap:clamp(8px,1.5vw,14px)}
+.rb-queue-sequence{min-width:0;padding:clamp(14px,2.5vw,23px)}
+.rb-queue-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,145px),1fr));gap:12px;min-width:0}
+.rb-queue-arrow{display:none}
+.rb-queue-item{width:100%;min-width:0;overflow-wrap:anywhere}
+.rb-queue-item.rb-serving,
+.rb-queue-stat:nth-child(2){background:#111827;border:1px solid #111827;color:#fff}
+.rb-queue-item.rb-serving>span,
+.rb-queue-item.rb-serving strong,
+.rb-queue-item.rb-serving small,
+.rb-queue-stat:nth-child(2)>span,
+.rb-queue-stat:nth-child(2) strong,
+.rb-queue-stat:nth-child(2) small{color:#fff}
+.rb-queue-item.rb-serving{box-shadow:0 5px 16px #11182722}
+@media(max-width:600px){
+  .rb-live-queue-page{padding:24px 12px}
+  .rb-queue-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .rb-queue-stat{padding:16px 8px;min-height:112px}
+  .rb-queue-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+  .rb-queue-item{min-height:112px;padding:12px 7px}
+}
+@media(max-width:360px){
+  .rb-queue-stats,.rb-queue-list{grid-template-columns:minmax(0,1fr)}
+}
