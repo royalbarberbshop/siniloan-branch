@@ -76,7 +76,22 @@ const css = `
 @media print{.cp-nav,.cp-btns,.cp-ft,.cp-steps{display:none}}
 `;
 
-const styles = css + corrected;
+const styles = css + corrected + `
+/* PDF reference palette: white navigation, warm cream page canvas, navy feature bands/footer, muted gold accents */
+.cp-nav,.rb-header{background:#ffffff!important}
+.cp,.rb-live-queue-page,.cp-sec,.cp-booking-area{background:#f7f5f0}
+.cp-banner,.rb-page-banner,.rb-footer{background:#111827!important}
+.cp-card,.cp-box,.cp-queue-card,.rb-queue-stat,.rb-queue-sequence{background-color:#ffffff}
+.cp-stat.now,.cp-q.now,.cp-selbar,.rb-queue-item.rb-serving{background-color:#111827}
+.cp-gold,.cp-btn-gold{background-color:#c9a45c}
+.cp-links button.on,.cp-brand small,.cp-eyebrow,.cp-banner h1{color:#c9a45c}
+@media(max-width:700px){
+  .cp-nav{background:#fff!important}
+  .rb-live-queue-page{padding:34px 14px}
+  .rb-queue-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .rb-queue-sequence{padding:16px}
+}
+`;
 const Crest = ({ s = 120 }) => <svg width={s} height={s} viewBox="0 0 100 100" aria-hidden="true"><path d="M34 16l8 11 8-14 8 14 8-11-2 15H36z" fill="#c9a227" /><circle cx="50" cy="58" r="36" fill="#fff" stroke="#c9a227" strokeWidth="5" /><text x="50" y="75" textAnchor="middle" fontFamily="Georgia,serif" fontWeight="700" fontSize="50" fill="#1a3a7c">R</text></svg>;
 function Logo({ size = 140 }) { const [bad, setBad] = useState(false); return bad ? <Crest s={size} /> : <img src={`${base}Royal-Logo.png`} height={size} style={{ maxWidth: "100%", objectFit: "contain" }} alt="Royal Barbershop" onError={() => setBad(true)} />; }
 
