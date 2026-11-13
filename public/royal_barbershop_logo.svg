@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">
+  <title>Royal Barbershop Logo</title>
+  <desc>Large navy serif letter R inside two gold concentric circles, topped with a gold crown. Transparent background.</desc>
+  <defs>
+    <style>
+      .gold { fill: none; stroke: #C5A52D; stroke-linecap: round; stroke-linejoin: round; }
+      .crown { fill: #C5A52D; stroke: #C5A52D; stroke-width: 7; stroke-linejoin: round; }
+    </style>
+  </defs>
+  <!-- Outer and inner circular borders -->
+  <circle class="gold" cx="600" cy="650" r="505" stroke-width="25"/>
+  <circle class="gold" cx="600" cy="650" r="475" stroke-width="9"/>
+  <!-- Crown centered over the top of the circular crest -->
+  <path class="crown" d="M 455,170 L 410,62 L 520,108 L 600,8 L 680,108 L 790,62 L 745,170 L 720,205 L 480,205 Z"/>
+  <!-- Small separation lines where crown meets the upper ring -->
+  <path d="M 478,198 L 492,232 M 722,198 L 708,232" fill="none" stroke="#C5A52D" stroke-width="9" stroke-linecap="round"/>
+  <!-- Navy blue serif initial -->
+  <text x="600" y="920" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="720" font-weight="bold" fill="#173B78">R</text>
+</svg>

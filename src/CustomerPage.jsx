@@ -78,7 +78,7 @@ const css = `
 
 const styles = css + corrected;
 const Crest = ({ s = 120 }) => <svg width={s} height={s} viewBox="0 0 100 100" aria-hidden="true"><path d="M34 16l8 11 8-14 8 14 8-11-2 15H36z" fill="#c9a227" /><circle cx="50" cy="58" r="36" fill="#fff" stroke="#c9a227" strokeWidth="5" /><text x="50" y="75" textAnchor="middle" fontFamily="Georgia,serif" fontWeight="700" fontSize="50" fill="#1a3a7c">R</text></svg>;
-function Logo({ size = 140 }) { const [bad, setBad] = useState(false); return bad ? <Crest s={size} /> : <img src={`${base}royal-logo.png`} height={size} style={{ maxWidth: "100%", objectFit: "contain" }} alt="Royal Barbershop" onError={() => setBad(true)} />; }
+function Logo({ size = 140 }) { const [bad, setBad] = useState(false); return bad ? <Crest s={size} /> : <img src={`${base}Royal-Logo.png`} height={size} style={{ maxWidth: "100%", objectFit: "contain" }} alt="Royal Barbershop" onError={() => setBad(true)} />; }
 
 export default function CustomerPage() {
   const [session, setSession] = useState(null), [profile, setProfile] = useState(null), [view, setView] = useState(viewFromHash());
@@ -154,12 +154,12 @@ export default function CustomerPage() {
 
   if (!isSupabaseConfigured || !supabase) return <div className="cp"><style>{styles}</style><section className="cp-sec"><div className="cp-card"><h2 className="cp-title">Booking is temporarily unavailable</h2><p className="cp-sub">The selected Supabase environment is not configured.</p></div></section></div>;
 
-  const nav = <header className="rb-header"><div className="rb-nav-wrap"><button className="rb-brand-btn" type="button" onClick={() => go("home")}><span className="rb-brand"><span className="rb-brand-mark">R</span><span><b>ROYAL BARBERSHOP</b><small>SINILOAN, LAGUNA</small></span></span></button>
+  const nav = <header className="rb-header"><div className="rb-nav-wrap"><button className="rb-brand-btn" type="button" onClick={() => go("home")}><span className="rb-brand"><img className="rb-brand-logo" src={`${base}royal_barbershop_logo.svg`} alt="Royal Barbershop logo" /><span><b>ROYAL BARBERSHOP</b><small>SINILOAN, LAGUNA</small></span></span></button>
     <nav className="rb-nav" aria-label="Main navigation">{[["home", "Home"], ["about", "About"], ["services", "Services"], ["contact", "Contact"]].map(([v, l]) => <button key={v} type="button" className={view === v ? "rb-active" : ""} onClick={() => go(v)}>{l}</button>)}
       {session && <button type="button" className="cp-mob" onClick={() => go("appointments")}>My Appointments</button>}<button type="button" className="cp-mob" onClick={session ? signOut : () => go("appointments")}>{session ? "Sign out" : "Sign in"}</button></nav>
     <div className="cp-right"><div className="cp-acct">{session && <button className="cp-text" onClick={() => go("appointments")}>My Appointments</button>}<button className="cp-text" onClick={session ? signOut : () => go("appointments")}>{session ? "Sign out" : "Sign in"}</button></div><button className="rb-btn rb-gold rb-nav-book" type="button" onClick={() => { resetBooking(); go("book"); }}>Book Appointment</button></div></div></header>;
 
-  const footer = <footer className="rb-footer"><div className="rb-footer-grid"><div><div className="rb-brand"><span className="rb-brand-mark" style={{ background: "#cda653", color: "#111827" }}>R</span><span><b>ROYAL BARBERSHOP</b></span></div><p>Quality haircuts and straightforward queue systems for the modern gentleman in Siniloan. Experience grooming without the hassle.</p></div>
+  const footer = <footer className="rb-footer"><div className="rb-footer-grid"><div><div className="rb-brand"><img className="rb-brand-logo" src={`${base}royal_barbershop_logo.svg`} alt="Royal Barbershop logo" /><span><b>ROYAL BARBERSHOP</b></span></div><p>Quality haircuts and straightforward queue systems for the modern gentleman in Siniloan. Experience grooming without the hassle.</p></div>
     <div><h4>HOURS OF OPERATION</h4><p>{SHOP.hours}<br /><b>{SHOP.open}</b></p></div><div><h4>LOCATION</h4><p>{SHOP.address}<br />Landmark: {SHOP.landmark}</p></div><div><h4>GET IN TOUCH</h4><p>{SHOP.phone}<br />{SHOP.email}</p></div></div></footer>;
 
   let body = null;
