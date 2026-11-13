@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { supabase, isSupabaseConfigured } from "./lib/supabase.js";
-import { LogIn, CheckCircle2, MapPin, Phone, Clock3, Download, Check, Menu } from "lucide-react";
+import { LogIn, CheckCircle2, MapPin, Phone, Clock3, Download, Check } from "lucide-react";
 import corrected from "./customer-corrected.css?inline";
 
 // Shop details. Values marked "confirm" come from the design mockup and may be placeholders.
@@ -69,12 +69,14 @@ const css = `
 .cp-map{margin-top:14px;border-radius:6px;min-height:130px;background:linear-gradient(135deg,#dfe8e0,#cfdce6);display:grid;place-items:center;font-size:11px;color:#374151;text-decoration:none}
 .cp-ft{background:#111827;color:#b6bdc9;padding:38px max(7vw,24px);font-size:11px}.cp-ft-in{max-width:1000px;margin:0 auto;display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:24px;line-height:1.8}.cp-ft h4{margin:0 0 8px;color:#cda653;font-size:9px;letter-spacing:.6px}.cp-ft b{color:#fff}
 @media(max-width:760px){.cp-links{display:none}.cp-hero-in,.cp-two,.cp-ft-in,.cp-act{grid-template-columns:1fr}.cp-cards{grid-template-columns:1fr 1fr}.cp-svc{grid-template-columns:1fr}.cp-pay{grid-template-columns:1fr}}
+.cp .rb-queue-note{margin-top:14px}
 .cp .cp-acct{display:flex;gap:12px;align-items:center}.cp .cp-mob{display:none}
-.cp .queue-list{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch}.cp .queue-item{flex:1 1 150px}.cp .queue-arrow{flex:0 0 20px;align-self:center;text-align:center}.cp .queue-item em{font-style:normal;font-size:9px;font-weight:800;color:#96712b}
+.cp .rb-queue-list{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch}.cp .rb-queue-item{flex:1 1 150px}.cp .rb-queue-arrow{flex:0 0 20px;align-self:center;text-align:center}.cp .rb-queue-item em{font-style:normal;font-size:9px;font-weight:800;color:#96712b}
 @media(max-width:800px){.cp .cp-acct{display:none}.cp .cp-mob{display:block}}
 @media print{.cp-nav,.cp-btns,.cp-ft,.cp-steps{display:none}}
 `;
 
+const styles = css + corrected;
 const Crest = ({ s = 120 }) => <svg width={s} height={s} viewBox="0 0 100 100" aria-hidden="true"><path d="M34 16l8 11 8-14 8 14 8-11-2 15H36z" fill="#c9a227" /><circle cx="50" cy="58" r="36" fill="#fff" stroke="#c9a227" strokeWidth="5" /><text x="50" y="75" textAnchor="middle" fontFamily="Georgia,serif" fontWeight="700" fontSize="50" fill="#1a3a7c">R</text></svg>;
 function Logo({ size = 140 }) { const [bad, setBad] = useState(false); return bad ? <Crest s={size} /> : <img src={`${base}royal-logo.png`} height={size} style={{ maxWidth: "100%", objectFit: "contain" }} alt="Royal Barbershop" onError={() => setBad(true)} />; }
 
@@ -88,8 +90,7 @@ export default function CustomerPage() {
   const [payChoice, setPayChoice] = useState("deposit"), [gref, setGref] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState(""), [ticket, setTicket] = useState(null);
   const [msg, setMsg] = useState({ name: "", phone: "", text: "" });
 
-  const [menu, setMenu] = useState(false);
-  const go = v => { setMenu(false); window.location.hash = v; window.scrollTo(0, 0); };
+  const go = v => { window.location.hash = v; window.scrollTo(0, 0); };
   useEffect(() => { const f = () => setView(viewFromHash()); window.addEventListener("hashchange", f); return () => window.removeEventListener("hashchange", f); }, []);
   useEffect(() => { if (!supabase) return; supabase.auth.getSession().then(({ data }) => setSession(data.session)); const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setSession(s)); return () => subscription.unsubscribe(); }, []);
   useEffect(() => { if (!supabase) return; Promise.all([supabase.from("services").select("id,name,description,duration_minutes,price_pesos").eq("is_active", true).order("name"), supabase.from("barbers").select("id,display_name").eq("is_active", true).order("display_name")]).then(([s, b]) => { if (!s.error) setServices(s.data || []); if (!b.error) setBarbers(b.data || []); }); }, []);
@@ -151,30 +152,30 @@ export default function CustomerPage() {
     <p className="cp-muted" style={{ textAlign: "center", marginTop: 14 }}>{authMode === "signup" ? "Already registered?" : "New here?"} <button className="cp-text" onClick={() => { setError(""); setAuthMode(authMode === "signup" ? "login" : "signup"); }}>{authMode === "signup" ? "Sign in" : "Create an account"}</button></p>
     {error && <div className="cp-err">{error}</div>}</div></section>;
 
-  if (!isSupabaseConfigured || !supabase) return <div className="cp"><style>{css}{corrected.replace(/@import[^;]*;/, "")}</style><section className="cp-sec"><div className="cp-card"><h2 className="cp-title">Booking is temporarily unavailable</h2><p className="cp-sub">The selected Supabase environment is not configured.</p></div></section></div>;
+  if (!isSupabaseConfigured || !supabase) return <div className="cp"><style>{styles}</style><section className="cp-sec"><div className="cp-card"><h2 className="cp-title">Booking is temporarily unavailable</h2><p className="cp-sub">The selected Supabase environment is not configured.</p></div></section></div>;
 
-  const nav = <header className="header"><div className="nav-wrap"><button className="brand-btn" type="button" onClick={() => go("home")}><span className="brand"><span className="brand-mark">R</span><span><b>ROYAL BARBERSHOP</b><small>SINILOAN, LAGUNA</small></span></span></button>
-    <nav className={`nav ${menu ? "open" : ""}`} aria-label="Main navigation">{[["home", "Home"], ["about", "About"], ["services", "Services"], ["contact", "Contact"]].map(([v, l]) => <button key={v} type="button" className={view === v ? "active" : ""} onClick={() => go(v)}>{l}</button>)}
+  const nav = <header className="rb-header"><div className="rb-nav-wrap"><button className="rb-brand-btn" type="button" onClick={() => go("home")}><span className="rb-brand"><span className="rb-brand-mark">R</span><span><b>ROYAL BARBERSHOP</b><small>SINILOAN, LAGUNA</small></span></span></button>
+    <nav className="rb-nav" aria-label="Main navigation">{[["home", "Home"], ["about", "About"], ["services", "Services"], ["contact", "Contact"]].map(([v, l]) => <button key={v} type="button" className={view === v ? "rb-active" : ""} onClick={() => go(v)}>{l}</button>)}
       {session && <button type="button" className="cp-mob" onClick={() => go("appointments")}>My Appointments</button>}<button type="button" className="cp-mob" onClick={session ? signOut : () => go("appointments")}>{session ? "Sign out" : "Sign in"}</button></nav>
-    <div className="cp-right"><div className="cp-acct">{session && <button className="cp-text" onClick={() => go("appointments")}>My Appointments</button>}<button className="cp-text" onClick={session ? signOut : () => go("appointments")}>{session ? "Sign out" : "Sign in"}</button></div><button className="btn gold nav-book" type="button" onClick={() => { resetBooking(); go("book"); }}>Book Appointment</button><button className="mobile-menu" type="button" aria-label="Menu" onClick={() => setMenu(m => !m)}><Menu size={22} /></button></div></div></header>;
+    <div className="cp-right"><div className="cp-acct">{session && <button className="cp-text" onClick={() => go("appointments")}>My Appointments</button>}<button className="cp-text" onClick={session ? signOut : () => go("appointments")}>{session ? "Sign out" : "Sign in"}</button></div><button className="rb-btn rb-gold rb-nav-book" type="button" onClick={() => { resetBooking(); go("book"); }}>Book Appointment</button></div></div></header>;
 
-  const footer = <footer className="footer"><div className="footer-grid"><div><div className="brand"><span className="brand-mark" style={{ background: "#cda653", color: "#111827" }}>R</span><span><b>ROYAL BARBERSHOP</b></span></div><p>Quality haircuts and straightforward queue systems for the modern gentleman in Siniloan. Experience grooming without the hassle.</p></div>
+  const footer = <footer className="rb-footer"><div className="rb-footer-grid"><div><div className="rb-brand"><span className="rb-brand-mark" style={{ background: "#cda653", color: "#111827" }}>R</span><span><b>ROYAL BARBERSHOP</b></span></div><p>Quality haircuts and straightforward queue systems for the modern gentleman in Siniloan. Experience grooming without the hassle.</p></div>
     <div><h4>HOURS OF OPERATION</h4><p>{SHOP.hours}<br /><b>{SHOP.open}</b></p></div><div><h4>LOCATION</h4><p>{SHOP.address}<br />Landmark: {SHOP.landmark}</p></div><div><h4>GET IN TOUCH</h4><p>{SHOP.phone}<br />{SHOP.email}</p></div></div></footer>;
 
   let body = null;
   if (view === "home") {
     const items = []; let n = 0;
     queue.slice(0, 6).forEach(q => { const now = q.status === "in_service"; if (!now) n++; items.push({ q, now, you: !!mine && q.queue_number === mine.queue_number, label: now ? "CURRENTLY SERVING" : `${ord(n)} IN LINE` }); });
-    body = <main className="live-queue-page"><section className="live-queue-panel" aria-labelledby="queue-title" aria-live="polite">
-      <div className="queue-heading"><span className="live-indicator"><i /> LIVE QUEUE STATUS</span><h1 id="queue-title">Siniloan Branch Queue Status</h1><p>{SHOP.address}</p></div>
-      <div className="queue-stats">
-        <article className="queue-stat your-ticket"><span>YOUR TICKET</span><strong>{mine ? qn(mine.queue_number) : "—"}</strong><small>{mine ? (mine.status === "in_service" ? "IN SERVICE" : mine.status === "booked" ? "BOOKED" : "WAITING") : session ? "No active ticket today" : "Sign in to see yours"}</small></article>
-        <article className="queue-stat"><span>CURRENTLY SERVING</span><strong>{serving[0] ? qn(serving[0].queue_number) : "—"}</strong><small>{serving[0] ? `IN SERVICE${serving.length > 1 ? ` · +${serving.length - 1} more` : ""}` : "No one yet"}</small></article>
-        <article className="queue-stat"><span>{mine ? "CUSTOMERS AHEAD" : "CUSTOMERS WAITING"}</span><strong>{ahead}</strong><small>{mine ? "Estimated turn" : "In line today"}</small></article>
-        <article className="queue-stat"><span>ESTIMATED WAIT</span><strong>{ahead * MIN_PER_CUSTOMER} Mins</strong><small>Subject to barber progress</small></article></div>
-      <section className="queue-sequence" aria-label="Live queue sequence"><h2>Live Queue Sequence</h2>
-        {qLoading ? <p className="queue-note">Loading today’s queue…</p> : qError ? <p className="queue-note">{qError}</p> : items.length === 0 ? <p className="queue-note">There are no customers in the live queue yet today.</p> : <div className="queue-list">{items.map((x, i) => <React.Fragment key={`${x.q.queue_number}-${i}`}>{i > 0 && <span className="queue-arrow" aria-hidden="true">›</span>}<article className={`queue-item ${x.now ? "serving" : ""} ${x.you ? "you" : ""}`}><span>{x.label}</span><strong>{qn(x.q.queue_number)}</strong><small>{x.q.service_name}</small>{x.you && <em>YOUR POSITION</em>}</article></React.Fragment>)}</div>}
-        <p className="queue-note">Queue information is displayed for monitoring purposes. Today’s queue only, updated every 15 seconds.</p></section></section></main>;
+    body = <main className="rb-live-queue-page"><section className="rb-live-queue-panel" aria-labelledby="queue-title" aria-live="polite">
+      <div className="rb-queue-heading"><span className="rb-live-indicator"><i /> LIVE QUEUE STATUS</span><h1 id="queue-title">Siniloan Branch Queue Status</h1><p>{SHOP.address}</p></div>
+      <div className="rb-queue-stats">
+        <article className="rb-queue-stat rb-your-ticket"><span>YOUR TICKET</span><strong>{mine ? qn(mine.queue_number) : "—"}</strong><small>{mine ? (mine.status === "in_service" ? "IN SERVICE" : mine.status === "booked" ? "BOOKED" : "WAITING") : session ? "No active ticket today" : "Sign in to see yours"}</small></article>
+        <article className="rb-queue-stat"><span>CURRENTLY SERVING</span><strong>{serving[0] ? qn(serving[0].queue_number) : "—"}</strong><small>{serving[0] ? `IN SERVICE${serving.length > 1 ? ` · +${serving.length - 1} more` : ""}` : "No one yet"}</small></article>
+        <article className="rb-queue-stat"><span>{mine ? "CUSTOMERS AHEAD" : "CUSTOMERS WAITING"}</span><strong>{ahead}</strong><small>{mine ? "Estimated turn" : "In line today"}</small></article>
+        <article className="rb-queue-stat"><span>ESTIMATED WAIT</span><strong>{ahead * MIN_PER_CUSTOMER} Mins</strong><small>Subject to barber progress</small></article></div>
+      <section className="rb-queue-sequence" aria-label="Live queue sequence"><h2>Live Queue Sequence</h2>
+        {qLoading ? <p className="rb-queue-note">Loading today’s queue…</p> : qError ? <p className="rb-queue-note">{qError}</p> : items.length === 0 ? <p className="rb-queue-note">There are no customers in the live queue yet today.</p> : <div className="rb-queue-list">{items.map((x, i) => <React.Fragment key={`${x.q.queue_number}-${i}`}>{i > 0 && <span className="rb-queue-arrow" aria-hidden="true">›</span>}<article className={`rb-queue-item ${x.now ? "rb-serving" : ""} ${x.you ? "rb-you" : ""}`}><span>{x.label}</span><strong>{qn(x.q.queue_number)}</strong><small>{x.q.service_name}</small>{x.you && <em>YOUR POSITION</em>}</article></React.Fragment>)}</div>}
+        <p className="rb-queue-note">Queue information is displayed for monitoring purposes. Today’s queue only, updated every 15 seconds.</p></section></section></main>;
   } else if (view === "about") {
     body = <><div className="cp-banner"><h1>About Royal Barbershop</h1><p>Learn about our local heritage, services, and commitment to the Siniloan community.</p></div><section className="cp-sec"><div className="cp-two" style={{ alignItems: "center" }}><div><div className="cp-eyebrow" style={{ textAlign: "left" }}>ESTABLISHED LOCAL BARBERSHOP</div><h2 className="cp-title" style={{ textAlign: "left" }}>A Heritage of Grooming</h2><p className="cp-muted" style={{ lineHeight: 1.8, marginBottom: 14 }}>Located in {SHOP.address}, Royal Barbershop has been providing reliable and premium haircuts to our neighborhood since our opening. We take pride in running a straightforward, high-quality local business.</p><p className="cp-muted" style={{ lineHeight: 1.8 }}>Our mission is simple: to make quality grooming accessible and organized. With our digital queue system, every customer receives dedicated attention without needing to stand in line for hours outside.</p></div><div className="cp-crest" style={{ border: "1px solid #e7e7e1" }}><Logo size={220} /></div></div></section></>;
   } else if (view === "services") {
@@ -236,5 +237,5 @@ export default function CustomerPage() {
       </section></>;
     }
   }
-  return <div className="cp"><style>{css}{corrected.replace(/@import[^;]*;/, "")}</style>{nav}{body}{footer}</div>;
+  return <div className="cp"><style>{styles}</style>{nav}{body}{footer}</div>;
 }
