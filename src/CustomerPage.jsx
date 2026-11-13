@@ -104,6 +104,7 @@ export default function CustomerPage() {
   const [slotList, setSlotList] = useState([]), [slotLoad, setSlotLoad] = useState(false), [cal, setCal] = useState(() => { const [y, m] = today().split("-").map(Number); return { y, m: m - 1 }; });
   const [payChoice, setPayChoice] = useState("deposit"), [gref, setGref] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState(""), [ticket, setTicket] = useState(null);
   const [msg, setMsg] = useState({ name: "", phone: "", text: "" });
+  const [contactBusy, setContactBusy] = useState(false), [contactNotice, setContactNotice] = useState("");
 
   const go = v => { window.location.hash = v; window.scrollTo(0, 0); };
   useEffect(() => { const f = () => setView(viewFromHash()); window.addEventListener("hashchange", f); return () => window.removeEventListener("hashchange", f); }, []);
@@ -142,6 +143,23 @@ export default function CustomerPage() {
   }
   async function facebook() { setError(""); setBusy(true); try { const { error } = await supabase.auth.signInWithOAuth({ provider: "facebook", options: { redirectTo: `${window.location.origin}${base}book`, scopes: "email,public_profile" } }); if (error) throw error; } catch (e) { setError(e.message || "Unable to continue with Facebook."); setBusy(false); } }
   async function signOut() { await supabase.auth.signOut(); setProfile(null); setAppointments([]); setTicket(null); go("home"); }
+  async function submitContactMessage(event) {
+    event.preventDefault();
+    setContactNotice("");
+    if (!supabase) { setContactNotice("Message sending is temporarily unavailable."); return; }
+    if (!msg.name.trim() || !msg.phone.trim() || !msg.text.trim()) { setContactNotice("Please complete all fields before sending."); return; }
+    setContactBusy(true);
+    try {
+      const { error } = await supabase.from("contact_messages").insert({
+        customer_name: msg.name.trim(), contact_number: msg.phone.trim(), message: msg.text.trim()
+      });
+      if (error) throw error;
+      setMsg({ name: "", phone: "", text: "" });
+      setContactNotice("Thank you! Your message has been sent to Royal Barbershop.");
+    } catch (err) {
+      setContactNotice(err.message || "We could not send your message. Please try again.");
+    } finally { setContactBusy(false); }
+  }
   async function confirm() {
     const r = gref.trim(); if (!/^\d{6,25}$/.test(r)) { setError("Enter your GCash reference number (6–25 digits)."); return; }
     setError(""); setBusy(true);
@@ -199,8 +217,11 @@ export default function CustomerPage() {
       {services.map(s => <div key={s.id} className="cp-svc" style={{ maxWidth: 740 }}><div className="cp-img" style={{ minHeight: 190, backgroundImage: `url(${base}haircut.jpg), linear-gradient(135deg,#1b2740,#111827)`, backgroundSize: "cover", backgroundPosition: "center" }} /><div className="cp-svc-b" style={{ padding: 24 }}><h3 style={{ fontSize: 20, fontWeight: 800 }}>{s.name}</h3><div style={{ color: "#cda653", fontSize: 20, fontWeight: 800, margin: "6px 0" }}>{peso(s.price_pesos)}</div><p>{s.description || "Professional barber service."}</p><p><Clock3 size={12} style={{ verticalAlign: "middle" }} /> ~{s.duration_minutes} Minutes</p><button className="cp-gold" style={{ marginTop: 10 }} onClick={() => { resetBooking(); setService(s.id); setStep(2); go("book"); }}>Book This Service</button></div></div>)}</section></>;
   } else if (view === "contact") {
     body = <><div className="cp-banner"><h1>Contact Us</h1><p>Have questions or need assistance with your booking? Reach out to our Siniloan branch.</p></div><section className="cp-sec"><div className="cp-two"><div><h2 style={{ fontSize: 18, fontWeight: 800 }}>Send us a Message</h2><p className="cp-muted" style={{ margin: "4px 0 16px" }}>We will respond as soon as our barber is free.</p>
-      <div className="cp-f"><label>Full Name</label><input value={msg.name} onChange={e => setMsg({ ...msg, name: e.target.value })} /></div><div className="cp-f"><label>Contact Number</label><input value={msg.phone} onChange={e => setMsg({ ...msg, phone: e.target.value })} /></div><div className="cp-f"><label>Your Message</label><textarea rows={4} placeholder="How can we help you?" value={msg.text} onChange={e => setMsg({ ...msg, text: e.target.value })} /></div>
-      <a className="cp-gold" style={{ textDecoration: "none", display: "inline-block" }} href={`mailto:${SHOP.email}?subject=${encodeURIComponent("Message from " + (msg.name || "a customer"))}&body=${encodeURIComponent(`${msg.text}\n\nName: ${msg.name}\nContact: ${msg.phone}`)}`}>Send Message</a></div>
+      <form onSubmit={submitContactMessage}>
+      <div className="cp-f"><label>Full Name *</label><input required maxLength={120} value={msg.name} onChange={e => setMsg({ ...msg, name: e.target.value })} /></div><div className="cp-f"><label>Contact Number *</label><input required maxLength={40} value={msg.phone} onChange={e => setMsg({ ...msg, phone: e.target.value })} /></div><div className="cp-f"><label>Your Message *</label><textarea required maxLength={5000} rows={4} placeholder="How can we help you?" value={msg.text} onChange={e => setMsg({ ...msg, text: e.target.value })} /></div>
+      <button className="cp-gold" type="submit" disabled={contactBusy} style={{ display: "inline-block" }}>{contactBusy ? "Sending..." : "Send Message"}</button>
+      {contactNotice && <p role="status" aria-live="polite" className="cp-muted" style={{ marginTop: 12 }}>{contactNotice}</p>}
+      </form></div>
       <div><div className="cp-info"><b style={{ fontSize: 14 }}>Royal Barbershop</b><div><MapPin size={13} />{SHOP.address}</div><div><Phone size={13} />{SHOP.phone}</div><div><Clock3 size={13} />{SHOP.hours} {SHOP.open}</div></div><a className="cp-map" target="_blank" rel="noreferrer" href={`https://www.google.com/maps/search/${encodeURIComponent(SHOP.address)}`}><span><MapPin size={16} style={{ verticalAlign: "middle" }} /> View Brgy. J. Rizal, Siniloan on Google Maps</span></a></div></div></section></>;
   } else if (view === "appointments") {
     if (!session) body = authPanel; else {

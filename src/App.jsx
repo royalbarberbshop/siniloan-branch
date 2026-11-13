@@ -6,7 +6,7 @@ import {
   Search, Bell, Plus, ChevronDown, Clock3, Check, X, UserRound,
   CreditCard, CircleDollarSign, TrendingUp, Menu, QrCode, Download,
   CircleHelp, CalendarCheck, Banknote, ArrowUpRight, Filter, Printer,
-  ShieldCheck, Save, CircleCheck, CircleAlert
+  ShieldCheck, Save, CircleCheck, CircleAlert, Mail, MessageSquare
 } from "lucide-react";
 
 const initialAppointments = [
@@ -47,7 +47,7 @@ const initialSales = [
 
 const navGroups = [
   {label:"OVERVIEW", items:[["Dashboard",LayoutDashboard],["Appointments",CalendarDays],["Live Queue",ListOrdered],["Register Walk-in",UserRoundPlus]]},
-  {label:"MANAGEMENT", items:[["Customers",Users],["Barbers & Staff",Scissors],["Services & Pricing",ReceiptText]]},
+  {label:"MANAGEMENT", items:[["Customers",Users],["Contact Messages",MessageSquare],["Barbers & Staff",Scissors],["Services & Pricing",ReceiptText]]},
   {label:"OPERATIONS", items:[["Point of Sale",CreditCard],["Sales & Cash Drawer",CircleDollarSign],["Reports & Analytics",ChartNoAxesCombined]]},
   {label:"SYSTEM", items:[["Settings",Settings]]}
 ];
@@ -81,6 +81,9 @@ export default function App({ profile, onSignOut }){
   const [customers,setCustomers] = useState([]);
   const [customersLoading,setCustomersLoading] = useState(false);
   const [customersError,setCustomersError] = useState("");
+  const [contactMessages,setContactMessages] = useState([]);
+  const [contactMessagesLoading,setContactMessagesLoading] = useState(false);
+  const [contactMessagesError,setContactMessagesError] = useState("");
   const [barbers,setBarbers] = useState([]);
   const [barbersLoading, setBarbersLoading] = useState(false);
   const [barbersError, setBarbersError] = useState("");
@@ -227,6 +230,41 @@ export default function App({ profile, onSignOut }){
       .subscribe();
     return () => { cancelled = true; window.clearTimeout(refreshTimer); supabase.removeChannel(channel); };
   }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setContactMessagesError("Supabase is not configured.");
+      return;
+    }
+    let cancelled = false;
+    let refreshTimer;
+    async function loadContactMessages(showLoading = false) {
+      if (showLoading) setContactMessagesLoading(true);
+      setContactMessagesError("");
+      const { data, error } = await supabase.from("contact_messages")
+        .select("id, customer_name, contact_number, message, status, created_at, updated_at")
+        .order("created_at", { ascending: false }).limit(200);
+      if (cancelled) return;
+      if (error) setContactMessagesError(error.message);
+      else setContactMessages(data || []);
+      setContactMessagesLoading(false);
+    }
+    loadContactMessages(true);
+    const channel = supabase.channel("admin-contact-messages")
+      .on("postgres_changes", { event: "*", schema: "public", table: "contact_messages" }, () => {
+        window.clearTimeout(refreshTimer);
+        refreshTimer = window.setTimeout(() => loadContactMessages(false), 180);
+      }).subscribe();
+    return () => { cancelled = true; window.clearTimeout(refreshTimer); supabase.removeChannel(channel); };
+  }, []);
+
+  async function updateContactMessageStatus(id, status) {
+    if (!supabase) return;
+    const { error } = await supabase.from("contact_messages").update({ status }).eq("id", id);
+    if (error) { notify(`Could not update message: ${error.message}`); return; }
+    setContactMessages(current => current.map(item => item.id === id ? { ...item, status } : item));
+    notify(`Message marked ${status}.`);
+  }
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
@@ -554,6 +592,7 @@ export default function App({ profile, onSignOut }){
   const commonProps = {
   appointments, setAppointments,
   customers, setCustomers, customersLoading, customersError, addCustomer,
+  contactMessages, contactMessagesLoading, contactMessagesError, updateContactMessageStatus,
   barbers, setBarbers,
   services, setServices,
   appointmentsLoading, appointmentsError,
@@ -580,6 +619,7 @@ export default function App({ profile, onSignOut }){
         {page==="Live Queue" && <Queue {...commonProps}/>}
         {page==="Register Walk-in" && <WalkIn {...commonProps}/>}
         {page==="Customers" && <Customers {...commonProps}/>}
+        {page==="Contact Messages" && <ContactMessages {...commonProps}/> }
         {page==="Barbers & Staff" && <Barbers {...commonProps}/>}
         {page==="Services & Pricing" && <Services {...commonProps}/>}
         {page==="Point of Sale" && <POS {...commonProps}/>}
@@ -942,6 +982,25 @@ function Reports(p){
       <section className="panel span-two"><div className="panel-head"><div><h3>Recent Transactions</h3><p>Latest paid POS records in {periodLabel.toLowerCase()}</p></div><span className="payment-tag">{filteredSales.length} records</span></div><div className="table-wrap"><table><thead><tr><th>TRANSACTION</th><th>DATE</th><th>CUSTOMER</th><th>SERVICE</th><th>PAYMENT</th><th>AMOUNT</th></tr></thead><tbody>{filteredSales.slice(0,10).map(s=><tr key={s.id}><td className="mono">{s.id}</td><td>{s.createdAt?new Date(s.createdAt).toLocaleDateString("en-PH",{timeZone:"Asia/Manila"}):"—"}</td><td>{s.customer}</td><td>{s.service}</td><td>{s.payment}</td><td><strong>{money(s.amount)}</strong></td></tr>)}</tbody></table>{!filteredSales.length&&<EmptyState title="No transactions in this period" text="Try a wider reporting period or record a POS payment."/>}</div></section>
     </div>
     <p className="small-note" style={{marginTop:12}}><CircleAlert size={14}/> Revenue is calculated from recorded POS transactions only. Barber counts are based on completed appointments; the current POS schema does not attribute transaction revenue to an individual barber. Cash drawer balances and discrepancies remain in Sales & Cash Drawer.</p>
+  </>;
+}
+
+function ContactMessages({contactMessages=[],contactMessagesLoading,contactMessagesError,updateContactMessageStatus}) {
+  const [filter,setFilter] = useState("All");
+  const filtered = contactMessages.filter(item => filter === "All" || item.status === filter.toLowerCase());
+  const unread = contactMessages.filter(item => item.status === "new").length;
+  return <>
+    <PageTitle title="Contact Messages" subtitle="Customer inquiries submitted through the Contact Us page." action={<span className="payment-tag">{unread} new message{unread===1?"":"s"}</span>}/>
+    {contactMessagesError && <div className="notice notice-error">{contactMessagesError}</div>}
+    <section className="panel">
+      <div className="panel-head"><div><h3>Customer Inbox</h3><p>Messages are saved in Supabase and synchronized with this admin page.</p></div><div className="toolbar-right">{["All","New","Read","Replied"].map(value=><button key={value} className={`btn ${filter===value?"btn-primary":"btn-secondary"}`} onClick={()=>setFilter(value)}>{value}</button>)}</div></div>
+      {contactMessagesLoading ? <EmptyState title="Loading messages" text="Fetching customer inquiries from Supabase."/> : filtered.length === 0 ? <EmptyState title="No messages found" text={filter === "All" ? "Customer messages will appear here when submitted." : `There are no ${filter.toLowerCase()} messages.`}/> :
+        <div className="contact-message-list">{filtered.map(item=><article className="contact-message-card" key={item.id}>
+          <div className="contact-message-top"><div><strong>{item.customer_name}</strong><span>{item.contact_number}</span></div><div className="contact-message-meta"><Status value={item.status === "new" ? "New" : item.status === "read" ? "Read" : "Replied"}/><time>{new Date(item.created_at).toLocaleString("en-PH",{dateStyle:"medium",timeStyle:"short",timeZone:"Asia/Manila"})}</time></div></div>
+          <p>{item.message}</p>
+          <div className="contact-message-actions">{item.status === "new" && <Button kind="secondary" icon={Mail} onClick={()=>updateContactMessageStatus(item.id,"read")}>Mark as Read</Button>}{item.status !== "replied" && <Button kind="primary" icon={Check} onClick={()=>updateContactMessageStatus(item.id,"replied")}>Mark as Replied</Button>}{item.status !== "new" && <Button kind="secondary" onClick={()=>updateContactMessageStatus(item.id,"new")}>Mark as New</Button>}</div>
+        </article>)}</div>}
+    </section>
   </>;
 }
 
