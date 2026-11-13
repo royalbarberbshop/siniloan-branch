@@ -1,18 +1,21 @@
-# Customer page - corrected layout, v2 (fixes the unstyled page)
-Replace these 4 files in your project (same folders), overwriting the earlier patch:
+# Customer page - corrected layout, v3 (fixes the Vite "minifyCSS" build failure)
+
+Overwrite these 4 files in your project (same folders). Only src/customer-corrected.css differs from v2.
 - src/CustomerPage.jsx
-- src/customer-corrected.css   (REPLACE - classes are now prefixed rb-)
+- src/customer-corrected.css   <- THE FIX
 - public/royal-logo.png
 - public/haircut.jpg
 
-## What was wrong in v1
-1. The corrected CSS was passed to React's <style> as two separate children and was not applied.
-2. Your admin src/styles.css (loaded on every page) defines .footer, .brand, .brand-mark, .btn, .eyebrow, .active, .muted, .notice - the same names as the corrected CSS - and leaked into the customer page.
-## Fix
-- CSS is now injected as ONE string.
-- All corrected-layout classes are prefixed "rb-" (CSS and page), so admin CSS cannot touch them. Admin files untouched.
+## Cause of the build failure
+src/customer-corrected.css (new in v2) began with leftover text from a removed Google Fonts @import:
+    500;600;700;800&display=swap');
+My @import-stripping pattern stopped at the first ";" inside the font URL (wght@400;500;600;...). The stray
+text + unterminated quote is invalid CSS and made Vite's CSS minifier abort. src/styles.css (admin) was NOT the problem.
+The font is still loaded (the page's own style block keeps the @import).
 
-## Verified (headless Chromium, with your real admin styles.css loaded)
-Home, About, Sign-in screens render correctly at desktop width; Home header/stat cards at phone width.
-## NOT verified
-npm run build; signed-in booking flow; real Supabase data. Test in DEMO first.
+## Checked
+- Strict scan: both CSS files have balanced braces/quotes and no stray text; browser (Chromium) parses 215/215 rules.
+- The same scan flags the v2 file (stray ";" statements + unterminated string).
+- Page renders; CSS variables (--gold, --navy) resolve.
+## NOT checked
+The real `npm run build` (needs a full npm install; not possible in the AI sandbox). Please run it or push to a DEMO branch / Actions.
