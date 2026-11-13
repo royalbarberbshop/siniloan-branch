@@ -71,3 +71,109 @@
 @media(max-width:360px){
   .rb-queue-stats,.rb-queue-list{grid-template-columns:minmax(0,1fr)}
 }
+
+/* White customer navigation and section backgrounds */
+.rb-header,
+.rb-nav-wrap {
+  background: #fff !important;
+}
+.rb-header {
+  border-bottom: 1px solid #e8e8e8;
+}
+.rb-live-queue-page,
+.rb-queue-section,
+.cp-sec,
+.cp-steps,
+.cp-banner {
+  background: #fff !important;
+}
+.rb-live-queue-page {
+  color: #111827;
+}
+
+/* Customer-facing responsive layout */
+.cp,
+.cp main,
+.cp section,
+.cp header,
+.cp footer {
+  min-width: 0;
+}
+.cp img {
+  max-width: 100%;
+}
+.cp input,
+.cp select,
+.cp textarea,
+.cp button {
+  max-width: 100%;
+}
+@media (max-width: 760px) {
+  .rb-header { position: sticky; top: 0; }
+  .rb-nav-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 14px;
+  }
+  .rb-brand-logo { width: 36px; height: 36px; }
+  .rb-brand b { font-size: 11px; }
+  .rb-brand small { font-size: 7px; }
+  .rb-nav-book { min-width: 0; padding: 9px 12px; font-size: 10px; }
+  .rb-nav {
+    order: 3;
+    display: flex;
+    width: 100%;
+    gap: 0;
+    justify-content: space-between;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 2px 0 0;
+  }
+  .rb-nav::-webkit-scrollbar { display: none; }
+  .rb-nav button { flex: 0 0 auto; padding: 9px 8px; font-size: 11px; }
+  .cp-right { margin-left: auto; }
+  .rb-live-queue-page { padding: 28px 14px; }
+  .rb-queue-heading { margin-bottom: 22px; }
+  .rb-queue-heading h1 { font-size: clamp(21px, 6vw, 27px); }
+  .rb-queue-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .rb-queue-stat { min-height: 108px; padding: 14px 8px; }
+  .rb-queue-stat strong { font-size: clamp(20px, 6vw, 26px); }
+  .rb-queue-sequence { padding: 14px; }
+  .rb-queue-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .rb-queue-item { min-height: 105px; padding: 12px 7px; }
+  .cp-sec { padding: 30px 14px; }
+  .cp-card { padding: 18px 14px; }
+  .cp-btns { width: 100%; }
+  .cp-btns button { flex: 1; }
+  .cp-steps { justify-content: flex-start; }
+  .cp-s { flex: 0 0 auto; }
+  .cp-ft { padding: 28px 18px; }
+}
+@media (max-width: 420px) {
+  .rb-nav-wrap { padding-left: 10px; padding-right: 10px; }
+  .rb-brand { gap: 6px; }
+  .rb-brand-logo { width: 31px; height: 31px; }
+  .rb-brand b { font-size: 9px; }
+  .rb-brand small { font-size: 6px; }
+  .rb-nav-book { padding: 8px 9px; font-size: 9px; }
+  .rb-nav button { font-size: 10px; padding: 8px 6px; }
+  .rb-live-queue-page { padding: 22px 10px; }
+  .rb-queue-stats { gap: 7px; }
+  .rb-queue-stat { min-height: 100px; }
+  .rb-queue-stat > span { font-size: 8px; }
+  .rb-queue-stat small { font-size: 9px; }
+  .rb-queue-list { gap: 7px; }
+  .rb-queue-item strong { font-size: 17px; }
+  .cp-title { font-size: 20px; }
+  .cp-btns { gap: 7px; }
+  .cp-btns button { padding: 10px 8px; font-size: 11px; }
+}
+@media (max-width: 340px) {
+  .rb-queue-stats,
+  .rb-queue-list { grid-template-columns: minmax(0, 1fr); }
+  .rb-nav-book { font-size: 8px; padding: 7px; }
+}
