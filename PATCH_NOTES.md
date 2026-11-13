@@ -1,20 +1,21 @@
-# Customer page redesign (matches "Costumer page.pdf" mockup)
+# Customer page - corrected layout (from royal-customer-frontend-corrected.zip)
+Supersedes royalbarber-customer-page-mockup-patch.zip. Copy these files into your project, same folders:
 
-Changed file (only one): src/CustomerPage.jsx
-No SQL migration. No admin files changed. Original saved by you in GitHub history.
+- src/CustomerPage.jsx        (replaced)
+- src/customer-corrected.css  (NEW - the corrected stylesheet; loaded only when the customer page is open, so the admin page is not affected)
+- public/royal-logo.png       (NEW - real logo)
+- public/haircut.jpg          (NEW - service photo)
 
-## Build status
-NOT verified with `npm run build` (npm install fails in the AI sandbox). Verified only: JSX syntax parses, no undefined variable names.
-Run `npm install && npm run build` locally, then test in DEMO before LIVE.
+No SQL migration. No admin files changed.
 
-## Requires in the DEMO/LIVE database (already in repo migrations; confirm they are applied)
-- customer_get_today_live_queue      (202611110015)
-- customer_get_available_slots       (202611110012)
-- customer_create_paid_appointment   (202611110011_gcash_reference_payment_workflow)
+## What follows the corrected layout
+Header, Home (live queue only: LIVE QUEUE STATUS, 4 stat cards, queue sequence with YOUR POSITION), footer, colours/fonts.
+The corrected ZIP only contained code for the Home screen. About / Services / Contact / Booking / Ticket / My Appointments keep the earlier layout, recoloured to the corrected palette.
 
-## Things to confirm / replace
-- Phone +63 912 345 6789 and email royalbarbers@gmail.com came from the mockup (SHOP constant, top of file).
-- Hours shown: 7:00 AM - 7:00 PM (handover). Mockup said 9-8. Real availability comes from barber_working_hours.
-- Wait estimate = 15 min x customers ahead (MIN_PER_CUSTOMER constant).
-- Optional images: public/media/logo/royal-barber-logo.png (falls back to a drawn R crest).
-- Map is a Google Maps link, not an embedded image. Contact form opens the visitor's email app (mailto).
+## Verified
+JSX syntax OK; no undefined names; all 6 screens render (signed-out, empty data) in a mocked test.
+## NOT verified
+npm run build (sandbox cannot finish npm install); signed-in booking flow; real Supabase data.
+
+## Still needed in the database (already in repo migrations - confirm applied in DEMO)
+customer_get_today_live_queue, customer_get_available_slots, customer_create_paid_appointment
