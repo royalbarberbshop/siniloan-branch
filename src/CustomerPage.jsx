@@ -96,7 +96,7 @@ const Crest = ({ s = 120 }) => <svg width={s} height={s} viewBox="0 0 100 100" a
 function Logo({ size = 140 }) { const [bad, setBad] = useState(false); return bad ? <Crest s={size} /> : <img src={`${base}Royal-Logo.png`} height={size} style={{ maxWidth: "100%", objectFit: "contain" }} alt="Royal Barbershop" onError={() => setBad(true)} />; }
 
 export default function CustomerPage() {
-  const [session, setSession] = useState(null), [profile, setProfile] = useState(null), [view, setView] = useState(viewFromHash());
+  const [session, setSession] = useState(null), [profile, setProfile] = useState(null), [customerDetails, setCustomerDetails] = useState({ name: "", phone: "" }), [view, setView] = useState(viewFromHash());
   const [authMode, setAuthMode] = useState("login"), [auth, setAuth] = useState({ name: "", phone: "", email: "", password: "" });
   const [services, setServices] = useState([]), [barbers, setBarbers] = useState([]), [appointments, setAppointments] = useState([]);
   const [queue, setQueue] = useState([]), [qLoading, setQLoading] = useState(true), [qError, setQError] = useState("");
@@ -117,7 +117,7 @@ export default function CustomerPage() {
   }, []);
   useEffect(() => {
     if (!session?.user?.id || !supabase) { setProfile(null); setAppointments([]); return; }
-    supabase.from("profiles").select("full_name,phone").eq("id", session.user.id).maybeSingle().then(({ data }) => { if (data) setProfile(data); });
+    supabase.from("profiles").select("full_name,phone").eq("id", session.user.id).maybeSingle().then(({ data }) => { if (data) { setProfile(data); setCustomerDetails({ name: data.full_name || "", phone: data.phone || "" }); } });
     supabase.from("appointments").select("id,starts_at,queue_date,queue_number,status,payment_status,payment_choice,payment_verified_at,service_price_snapshot,created_at,services(name,price_pesos),barbers(display_name)").eq("customer_id", session.user.id).order("starts_at", { ascending: false }).limit(30).then(({ data }) => setAppointments(data || []));
   }, [session?.user?.id, ticket]);
   useEffect(() => {
@@ -132,7 +132,7 @@ export default function CustomerPage() {
   const serving = queue.filter(q => q.status === "in_service"), waiting = queue.filter(q => q.status !== "in_service");
   const myIdx = mine ? queue.findIndex(q => q.queue_number === mine.queue_number) : -1;
   const ahead = myIdx >= 0 ? queue.slice(0, myIdx).filter(q => q.status !== "in_service").length : waiting.length;
-  const fullName = profile?.full_name || auth.name || "", phone = profile?.phone || auth.phone || "";
+  const fullName = customerDetails.name, phone = customerDetails.phone;
 
   async function submitAuth(e) {
     e.preventDefault(); setError(""); setBusy(true);
@@ -162,8 +162,13 @@ export default function CustomerPage() {
   }
   async function confirm() {
     const r = gref.trim(); if (!/^\d{6,25}$/.test(r)) { setError("Enter your GCash reference number (6–25 digits)."); return; }
+    if (!fullName.trim()) { setError("Enter your full name."); setStep(4); return; }
+    if (!/^09\d{9}$/.test(phone.trim())) { setError("Enter a valid 11-digit Philippine mobile number starting with 09."); setStep(4); return; }
     setError(""); setBusy(true);
     try {
+      const { error: profileError } = await supabase.from("profiles").update({ full_name: fullName.trim(), phone: phone.trim() }).eq("id", session.user.id);
+      if (profileError) throw profileError;
+      setProfile({ ...(profile || {}), full_name: fullName.trim(), phone: phone.trim() });
       const { data, error } = await supabase.rpc("customer_create_paid_appointment", { p_service_id: service, p_barber_id: barber === "any" ? null : barber, p_starts_at: new Date(`${date}T${time}:00+08:00`).toISOString(), p_payment_choice: payChoice, p_provider_reference: r });
       if (error) throw error; setTicket(Array.isArray(data) ? data[0] : data);
     } catch (e) { setError(e.message || "That time is no longer available. Please choose another slot."); } finally { setBusy(false); }
@@ -260,9 +265,9 @@ export default function CustomerPage() {
           <div className="cp-sel"><span><b style={{ color: "#111827" }}>Selected Date:</b> <b>{longDate(date)}</b></span><span className="cp-muted">Timezone: GMT+8 (Laguna, PH)</span></div>
           <div className="cp-f"><label>Barber</label><select value={barber} onChange={e => { setBarber(e.target.value); setTime(""); }}><option value="any">Any available barber</option>{barbers.map(b => <option key={b.id} value={b.id}>{b.display_name}</option>)}</select></div>
           {slotLoad ? <p className="cp-muted">Checking availability…</p> : error ? <div className="cp-err">{error}</div> : slotList.length === 0 ? <p className="cp-muted">No working hours were found for this barber on the selected weekday. Check the barber’s saved weekly schedule in Admin → Barbers &amp; Staff, then try again.</p> : <><div className="cp-h">MORNING SESSIONS</div><div className="cp-slots">{morning.map(slotBtn)}</div><div className="cp-h">AFTERNOON &amp; EVENING SESSIONS</div><div className="cp-slots">{later.map(slotBtn)}</div></>}</div><div className="cp-btns w">{back(2)}{next(4, "Next Step", !!time)}</div></>}
-        {step === 4 && <><Head n={4} t="Provide Customer Details" s="These details come from your account. We use your contact number to send booking status updates and track your real-time queue position." /><div className="cp-card">
-          <div className="cp-f"><label>Full Name *</label><input readOnly value={fullName} /></div><div className="cp-f"><label>Contact Number (Philippine Mobile) *</label><input readOnly value={phone} /><small>Format: 11 digits starting with 09</small></div>
-          {(!fullName || !phone) && <div className="cp-err">Your account is missing a name or mobile number. Please update your profile with the shop before booking.</div>}</div><div className="cp-btns">{back(3)}{next(5, "Review Appointment", !!fullName && !!phone)}</div></>}
+        {step === 4 && <><Head n={4} t="Provide Customer Details" s="Enter the name and mobile number the shop should use for your booking updates and queue information." /><div className="cp-card">
+          <div className="cp-f"><label>Full Name *</label><input required maxLength={120} autoComplete="name" value={fullName} onChange={e => setCustomerDetails(d => ({ ...d, name: e.target.value }))} placeholder="Enter your full name" /></div><div className="cp-f"><label>Contact Number (Philippine Mobile) *</label><input required type="tel" inputMode="numeric" autoComplete="tel-national" maxLength={11} pattern="09[0-9]{9}" value={phone} onChange={e => setCustomerDetails(d => ({ ...d, phone: e.target.value.replace(/\D/g, "").slice(0, 11) }))} placeholder="09123456789" /><small>Format: 11 digits starting with 09</small></div>
+          {error && <div className="cp-err">{error}</div>}</div><div className="cp-btns">{back(3)}{next(5, "Review Appointment", !!fullName.trim() && /^09\d{9}$/.test(phone.trim()))}</div></>}
         {step === 5 && <><Head n={5} t="Review and Confirm Appointment" s="Please double check your booking and client details. Your appointment is confirmed after the shop verifies your GCash payment." /><div className="cp-card cp-wide"><h3 style={{ fontSize: 15, fontWeight: 800, marginBottom: 8 }}>Appointment Details</h3><div className="cp-tbl">
           {[["Customer Name", fullName], ["Service Offered", chosen?.name], ["Price", peso(price), "g"], ["Date & Time", `${longDate(date)} @ ${t12(time)}`], ["Assigned Barber", selBarber?.display_name || "Any available barber"]].map(([k, v, c]) => <div className="r" key={k}>{k}<b className={c}>{v}</b></div>)}</div>
           <h3 style={{ fontSize: 13, fontWeight: 800, margin: "18px 0 4px" }}>GCash Payment</h3><div className="cp-pay">{[["deposit", "50% Downpayment", price / 2], ["full", "100% Full Payment", price]].map(([k, l, a]) => <button key={k} className={payChoice === k ? "sel" : ""} onClick={() => setPayChoice(k)}><b>{l}</b>Pay {peso(a)} now{k === "deposit" ? ` · ${peso(price - a)} at the shop` : ""}</button>)}</div>
